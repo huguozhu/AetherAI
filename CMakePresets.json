@@ -1,0 +1,12 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "windows-default",
+            "displayName": "Windows VS 2026 x64",
+            "generator": "Visual Studio 18 2026",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build"
+        }
+    ]
+}
