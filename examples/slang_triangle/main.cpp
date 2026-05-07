@@ -15,10 +15,11 @@
 import aether.rhi;
 import aether.core;
 import aether.shaders;
+import aether.renderer;
 
 // Global window and device
 HWND g_hwnd = nullptr;
-std::unique_ptr<aether::rhi::Device> g_device = nullptr;
+std::shared_ptr<aether::rhi::Device> g_device = nullptr;
 
 // Window procedure
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -34,7 +35,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"AetherSlangTriangleWindow";
-
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
@@ -51,7 +51,6 @@ HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     return hwnd;
 }
 
-// Read shader source from file
 std::string read_shader_file(const char* path) {
     std::ifstream file(path, std::ios::in | std::ios::binary);
     if (!file) {
@@ -66,7 +65,6 @@ std::string read_shader_file(const char* path) {
 int main(int argc, char* argv[]) {
     HINSTANCE hInstance = GetModuleHandle(nullptr);
 
-    // Determine shader path relative to executable
     char exePath[MAX_PATH];
     GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
     std::string exeDir(exePath);
@@ -76,43 +74,53 @@ int main(int argc, char* argv[]) {
     }
     std::string shaderPath = exeDir + "/../../../../src/Shaders/aether_shaders.slang";
 
-    // Create window
     g_hwnd = create_window(hInstance, SW_SHOW);
     if (!g_hwnd) {
         aether::log::error("Failed to create window");
         return 1;
     }
 
-    // Create device
     g_device = aether::rhi::create_d3d12_device();
     if (!g_device) {
         aether::log::error("Failed to create D3D12 device");
         return 1;
     }
 
+    // --- Create MeshComponent with triangle data ---
+    auto mesh = std::make_shared<aether::renderer::MeshComponent>();
+    const float triPositions[] = {
+        -0.5f, -0.5f, 0.0f,
+         0.0f,  0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f
+    };
+    mesh->set_positions(triPositions);
+
+    // Create RenderScene and register component
+    aether::renderer::RenderScene renderScene(g_device);
+    renderScene.register_component(mesh);
+
+    aether::log::info("Registered triangle MeshComponent with SceneManager");
+
     // --- Compile shaders with Aether.Shaders (Slang) ---
     aether::shaders::ShaderCompiler compiler;
 
-    // Read .slang source
     std::string shaderSource = read_shader_file(shaderPath.c_str());
     if (shaderSource.empty()) {
-        // Fallback: embed shader source directly
         aether::log::warn("Could not read shader file, using embedded source");
+        // Position-only shader that matches MeshComponent vertex format
         shaderSource = R"(
             struct VSOutput {
                 float4 pos : SV_POSITION;
-                float4 color : COLOR;
             };
             [shader("vertex")]
-            VSOutput vertexMain(float3 position : POSITION, float4 color : COLOR) {
+            VSOutput vertexMain(float3 position : POSITION) {
                 VSOutput o;
                 o.pos = float4(position, 1.0);
-                o.color = color;
                 return o;
             }
             [shader("pixel")]
             float4 pixelMain(VSOutput input) : SV_TARGET {
-                return input.color;
+                return float4(0.0, 1.0, 0.0, 1.0);
             }
         )";
     }
@@ -120,7 +128,7 @@ int main(int argc, char* argv[]) {
     aether::log::info("Compiling vertex shader with Slang...");
     auto vsResult = compiler.compile({
         .source = shaderSource,
-        .entryPoint = "vertexMain",
+        .entryPoint = "forwardVS",
         .type = aether::shaders::ShaderType::Vertex,
         .target = aether::shaders::ShaderTarget::DXIL,
     });
@@ -132,7 +140,7 @@ int main(int argc, char* argv[]) {
     aether::log::info("Compiling pixel shader with Slang...");
     auto psResult = compiler.compile({
         .source = shaderSource,
-        .entryPoint = "pixelMain",
+        .entryPoint = "forwardPS",
         .type = aether::shaders::ShaderType::Pixel,
         .target = aether::shaders::ShaderTarget::DXIL,
     });
@@ -144,31 +152,7 @@ int main(int argc, char* argv[]) {
     aether::log::info("Slang shaders compiled successfully! VS: {} bytes, PS: {} bytes",
                        vsResult.get_bytecode().size(), psResult.get_bytecode().size());
 
-    // --- Vertex data (green triangle) ---
-    struct Vertex {
-        float position[3];
-        float color[4];
-    };
-
-    Vertex vertices[] = {
-        {{-0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-        {{ 0.0f,  0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-        {{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-    };
-
-    // Create vertex buffer
-    aether::rhi::BufferDesc vbDesc{};
-    vbDesc.size = sizeof(vertices);
-    vbDesc.heap = aether::rhi::HeapType::Upload;
-    vbDesc.bindFlags = aether::rhi::BindFlags::VertexBuffer;
-    auto vertexBuffer = g_device->create_buffer(vbDesc);
-    {
-        void* mapped = vertexBuffer->map();
-        memcpy(mapped, vertices, sizeof(vertices));
-        vertexBuffer->unmap();
-    }
-
-    // --- Create pipeline with Slang-compiled shaders ---
+    // --- Create pipeline ---
     aether::rhi::GfxPipelineDesc pipelineDesc{};
     pipelineDesc.vsBytecode = vsResult.get_bytecode();
     pipelineDesc.psBytecode = psResult.get_bytecode();
@@ -195,7 +179,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    aether::log::info("Slang triangle example initialized successfully!");
+    aether::log::info("Slang triangle example initialized with MeshComponent + SceneManager!");
     aether::log::info("Entering main loop...");
 
     // --- Main loop ---
@@ -222,11 +206,18 @@ int main(int argc, char* argv[]) {
             cmdList->clear_texture(backBuffer.get(), clearColor);
             cmdList->bind_render_targets(backBuffer.get(), nullptr);
 
+            // Update SceneManager with identity view (NDC-space rendering)
+            aether::renderer::SceneView view{};
+            view.viewProj = aether::math::float4x4::identity();
+            view.eyePosition = {0, 0, -1};
+            view.nearPlane = 0.1f;
+            view.farPlane = 100.0f;
+            renderScene.update(view);
+
+            // Render via SceneManager
             cmdList->set_viewport(0, 0, 800, 600, 0, 1);
             cmdList->set_scissor(0, 0, 800, 600);
-            cmdList->bind_pipeline(pipeline.get());
-            cmdList->ia_set_vertex_buffer(0, vertexBuffer.get(), sizeof(Vertex));
-            cmdList->draw(3, 1, 0, 0);
+            renderScene.render_forward(cmdList.get(), pipeline.get());
 
             frameCount++;
             if (frameCount % 60 == 0) {

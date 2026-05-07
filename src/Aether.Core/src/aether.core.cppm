@@ -41,10 +41,23 @@ struct BoundingSphere {
     float radius;
 };
 
+struct BoundingBox {
+    float3 min;
+    float3 max;
+
+    float3 center() const;
+    float3 extents() const;
+    static BoundingBox from_center_extents(const float3& center, const float3& extents);
+    static BoundingBox from_sphere(const BoundingSphere& sphere);
+};
+
+enum class Containment : uint8_t { Outside, Intersects, Inside };
+
 struct Frustum {
     float4 planes[6]; // left, right, top, bottom, near, far
     static Frustum from_view_proj(const float4x4& viewProj);
     bool contains(const BoundingSphere& sphere) const;
+    Containment contains(const BoundingBox& box) const;
 };
 
 } // namespace aether::math

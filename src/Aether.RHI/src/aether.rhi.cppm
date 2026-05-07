@@ -124,7 +124,7 @@ class RayTracingPipeline : public PipelineState {};
 class ShaderBinding {
 public:
     virtual ~ShaderBinding() = default;
-    virtual void set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset = 0) = 0;
+    virtual void set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset = 0, uint32_t stride = 0) = 0;
     virtual void set_texture(uint32_t slot, TexturePtr texture) = 0;
 };
 

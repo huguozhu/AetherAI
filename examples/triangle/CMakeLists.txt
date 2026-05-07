@@ -1,6 +1,6 @@
 add_executable(TriangleExample)
 target_sources(TriangleExample PRIVATE main.cpp)
-target_link_libraries(TriangleExample PRIVATE Aether.Shaders Aether.RHI Aether.Core)
+target_link_libraries(TriangleExample PRIVATE Aether.Renderer Aether.Shaders Aether.RHI Aether.Core)
 
 # Link D3D12 and DXGI
 target_link_libraries(TriangleExample PRIVATE d3d12.lib dxgi.lib)

@@ -13,10 +13,11 @@
 import aether.rhi;
 import aether.core;
 import aether.shaders;
+import aether.renderer;
 
 // Global window and device
 HWND g_hwnd = nullptr;
-std::unique_ptr<aether::rhi::Device> g_device = nullptr;
+std::shared_ptr<aether::rhi::Device> g_device = nullptr;
 
 // Window procedure
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -25,21 +26,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             PostQuitMessage(0);
             return 0;
         case WM_SIZE:
-            // Handle resize
             return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-// Create a Win32 window
 HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"AetherTriangleWindow";
-
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-
     RegisterClassW(&wc);
 
     HWND hwnd = CreateWindowExW(
@@ -52,7 +49,6 @@ HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     return hwnd;
 }
 
-// Read shader source from file
 std::string read_shader_file(const std::string& path) {
     std::ifstream file(path, std::ios::in | std::ios::binary);
     if (!file) {
@@ -69,48 +65,34 @@ int main(int argc, char* argv[]) {
 
     HINSTANCE hInstance = GetModuleHandle(nullptr);
 
-    // Create window
     g_hwnd = create_window(hInstance, SW_SHOW);
     if (!g_hwnd) {
         aether::log::error("Failed to create window");
         return 1;
     }
 
-    // Create device
     g_device = aether::rhi::create_d3d12_device();
     if (!g_device) {
         aether::log::error("Failed to create D3D12 device");
         return 1;
     }
 
-    // --- Simple triangle vertex data ---
-    struct Vertex {
-        float position[3];
-        float color[3];
-        float uv[2];
+    // --- Create MeshComponent with triangle data ---
+    auto mesh = std::make_shared<aether::renderer::MeshComponent>();
+    const float triPositions[] = {
+        -0.5f, -0.5f, 0.0f,
+         0.0f,  0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f
     };
+    mesh->set_positions(triPositions);
 
-    // Triangle centered on screen — CW winding in NDC (front face)
-    Vertex triVertices[] = {
-        {{-0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{ 0.0f,  0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    };
+    // Create RenderScene with OctreeSceneManager and register component
+    aether::renderer::RenderScene renderScene(g_device);
+    renderScene.register_component(mesh);
 
-    // Create vertex buffer
-    aether::rhi::BufferDesc vbDesc{};
-    vbDesc.size = sizeof(triVertices);
-    vbDesc.heap = aether::rhi::HeapType::Upload;
-    vbDesc.bindFlags = aether::rhi::BindFlags::VertexBuffer;
-    auto vertexBuffer = g_device->create_buffer(vbDesc);
-    {
-        void* mappedData = vertexBuffer->map();
-        memcpy(mappedData, triVertices, sizeof(triVertices));
-        vertexBuffer->unmap();
-    }
+    aether::log::info("Registered triangle MeshComponent with SceneManager");
 
     // --- Compile shaders via Aether.Shaders ---
-    // Determine shader path relative to executable
     char exePath[MAX_PATH];
     GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
     std::string exeDir(exePath);
@@ -128,9 +110,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Use position-only shaders that match MeshComponent's vertex format
     auto vsResult = compiler.compile({
         .source = shaderSource,
-        .entryPoint = "mainVS",
+        .entryPoint = "forwardVS",
         .type = aether::shaders::ShaderType::Vertex,
         .target = aether::shaders::ShaderTarget::DXIL,
     });
@@ -141,7 +124,7 @@ int main(int argc, char* argv[]) {
 
     auto psResult = compiler.compile({
         .source = shaderSource,
-        .entryPoint = "mainPS",
+        .entryPoint = "forwardPS",
         .type = aether::shaders::ShaderType::Pixel,
         .target = aether::shaders::ShaderTarget::DXIL,
     });
@@ -187,57 +170,55 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    aether::log::info("Triangle example initialized successfully!");
+    aether::log::info("Triangle example initialized with MeshComponent + SceneManager!");
     aether::log::info("Entering main loop...");
 
     // --- Main loop ---
     MSG msg = {};
     uint64_t frameCount = 0;
     while (msg.message != WM_QUIT) {
-        // Process window messages
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
 
-        // Get back buffer
         uint32_t backBufferIndex = swapChain->get_current_index();
         auto backBuffer = swapChain->get_back_buffer(backBufferIndex);
 
         if (backBuffer) {
-            // Create command list
             auto cmdList = g_device->create_graphics_command_list();
             cmdList->reset();
 
-            // Transition back buffer to render target state
-            // D3D12_RESOURCE_STATE_PRESENT = 0, D3D12_RESOURCE_STATE_RENDER_TARGET = 4
             cmdList->resource_barrier(backBuffer.get(),
                 aether::rhi::ResourceState::Common,
                 aether::rhi::ResourceState::RenderTarget);
 
-            // Clear (bright red so triangle is visible against it)
             float clearColor[] = {1.0f, 0.0f, 0.0f, 1.0f};
             cmdList->clear_texture(backBuffer.get(), clearColor);
             cmdList->bind_render_targets(backBuffer.get(), nullptr);
 
-            // Set pipeline and draw textured quad
+            // Update SceneManager with identity view (NDC-space rendering)
+            aether::renderer::SceneView view{};
+            view.viewProj = aether::math::float4x4::identity();
+            view.eyePosition = {0, 0, -1};
+            view.nearPlane = 0.1f;
+            view.farPlane = 100.0f;
+            renderScene.update(view);
+
+            // Render via SceneManager — iterates MeshComponents, frustum culls, draws
             cmdList->set_viewport(0, 0, 800, 600, 0, 1);
             cmdList->set_scissor(0, 0, 800, 600);
-            cmdList->bind_pipeline(pipeline.get());
-            cmdList->ia_set_vertex_buffer(0, vertexBuffer.get(), sizeof(Vertex));
-            cmdList->draw(3, 1, 0, 0);
+            renderScene.render_forward(cmdList.get(), pipeline.get());
 
             frameCount++;
             if (frameCount % 60 == 0) {
                 aether::log::info("Rendered {} frames", frameCount);
             }
 
-            // Transition back to present
             cmdList->resource_barrier(backBuffer.get(),
                 aether::rhi::ResourceState::RenderTarget,
                 aether::rhi::ResourceState::Common);
 
-            // Execute (execute_command_lists handles close)
             std::unique_ptr<aether::rhi::CommandList> cmdLists[] = {std::move(cmdList)};
             g_device->execute_command_lists(cmdLists);
             swapChain->present(true);

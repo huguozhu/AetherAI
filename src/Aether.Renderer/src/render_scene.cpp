@@ -12,52 +12,57 @@ namespace aether::renderer {
 RenderScene::RenderScene(std::shared_ptr<rhi::Device> device)
     : m_device(std::move(device))
 {
-    m_sceneManager = std::make_unique<GPUSceneManager>(m_device);
+    // Default scene bounds — large enough for most scenes
+    math::BoundingBox defaultBounds{{-500, -500, -500}, {500, 500, 500}};
+    m_sceneManager = std::make_unique<OctreeSceneManager>(
+        m_device, defaultBounds);
+    log::info("RenderScene: initialized with OctreeSceneManager");
+}
 
-    m_cullingJob = std::make_unique<CullingJob>(
-        m_device,
-        m_sceneManager->scene_buffer_shared(),
-        m_sceneManager->visible_buffer_shared(),
-        kMaxObjects);
-
-    m_indirectDraw = std::make_unique<IndirectDrawManager>(
-        m_device,
-        m_sceneManager->scene_buffer_shared(),
-        m_sceneManager->visible_buffer_shared(),
-        m_sceneManager->indirect_buffer_shared());
-
-    log::info("RenderScene: initialized");
+RenderScene::RenderScene(std::shared_ptr<rhi::Device> device,
+                          std::unique_ptr<SceneManager> sceneManager)
+    : m_device(std::move(device))
+    , m_sceneManager(std::move(sceneManager))
+{
+    log::info("RenderScene: initialized with custom SceneManager");
 }
 
 uint32_t RenderScene::add_object(const SceneObjectGPU& obj) {
-    return m_sceneManager->add_object(obj);
+    return m_sceneManager ? m_sceneManager->add_object(obj) : UINT32_MAX;
+}
+
+uint32_t RenderScene::register_component(std::shared_ptr<Component> component) {
+    return m_sceneManager ? m_sceneManager->register_component(std::move(component)) : UINT32_MAX;
+}
+
+void RenderScene::unregister_component(uint32_t componentId) {
+    if (m_sceneManager) m_sceneManager->unregister_component(componentId);
+}
+
+std::shared_ptr<Component> RenderScene::get_component(uint32_t componentId) const {
+    return m_sceneManager ? m_sceneManager->get_component(componentId) : nullptr;
 }
 
 void RenderScene::update(const SceneView& view) {
-    m_cullingJob->update_view(view);
+    if (m_sceneManager) {
+        m_sceneManager->set_view(view);
+    }
 }
 
 void RenderScene::render(rhi::GraphicsCommandList* gfxCmd,
                           rhi::ComputeCommandList* computeCmd,
                           rhi::CopyCommandList* copyCmd)
 {
-    if (!gfxCmd || !computeCmd || !copyCmd) return;
+    if (m_sceneManager) {
+        m_sceneManager->render(gfxCmd, computeCmd, copyCmd);
+    }
+}
 
-    // 1. Upload scene data (if dirty)
-    m_sceneManager->upload_scene_data(copyCmd);
-
-    // 2. Dispatch culling compute shader
-    m_cullingJob->dispatch(computeCmd);
-
-    // 3. Dispatch compaction compute shader
-    uint32_t objCount = m_sceneManager->object_count();
-    m_indirectDraw->dispatch_compact(computeCmd, objCount);
-
-    // 4. Indirect draw
-    m_indirectDraw->draw(gfxCmd, nullptr, objCount);
-
-    log::debug("RenderScene: frame rendered ({} objects)",
-               m_sceneManager->object_count());
+void RenderScene::render_forward(rhi::GraphicsCommandList* gfxCmd,
+                                  rhi::GraphicsPipeline* pipeline) {
+    if (m_sceneManager) {
+        m_sceneManager->render_forward(gfxCmd, pipeline);
+    }
 }
 
 } // namespace aether::renderer

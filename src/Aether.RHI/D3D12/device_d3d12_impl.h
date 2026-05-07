@@ -12,8 +12,9 @@ struct DescriptorAllocator {
     UINT capacity = 10000;
     UINT currentOffset = 0;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE alloc_cpu(UINT count = 1);
-    D3D12_GPU_DESCRIPTOR_HANDLE alloc_gpu(UINT count = 1);
+    // Allocate together: returns CPU and GPU handles at the SAME offset
+    struct AllocResult { D3D12_CPU_DESCRIPTOR_HANDLE cpu; D3D12_GPU_DESCRIPTOR_HANDLE gpu; };
+    AllocResult alloc(UINT count = 1);
     void reset();
 };
 
@@ -29,7 +30,7 @@ struct ShaderBindingD3D12 : public ShaderBinding {
                        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart,
                        UINT count, UINT descriptorSize);
 
-    void set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset) override;
+    void set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset = 0, uint32_t stride = 0) override;
     void set_texture(uint32_t slot, TexturePtr texture) override;
 };
 

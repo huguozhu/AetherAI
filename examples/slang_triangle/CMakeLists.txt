@@ -2,7 +2,7 @@ add_executable(SlangTriangleExample)
 
 target_sources(SlangTriangleExample PRIVATE main.cpp)
 
-target_link_libraries(SlangTriangleExample PRIVATE Aether.Shaders Aether.RHI Aether.Core)
+target_link_libraries(SlangTriangleExample PRIVATE Aether.Renderer Aether.Shaders Aether.RHI Aether.Core)
 target_link_libraries(SlangTriangleExample PRIVATE d3d12.lib dxgi.lib d3dcompiler.lib)
 
 # Copy Slang runtime DLLs to example output directory

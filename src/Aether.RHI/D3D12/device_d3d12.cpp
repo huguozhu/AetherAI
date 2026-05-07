@@ -284,7 +284,14 @@ BufferPtr DeviceD3D12::create_buffer(const BufferDesc& desc) {
 
     D3D12_RESOURCE_DESC resourceDesc{};
     resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    resourceDesc.Width = desc.size;
+    // D3D12 upload heap buffers must meet minimum size requirements.
+    // Small buffers (< 4KB) can fail on some adapters/drivers.
+    if (heapType == D3D12_HEAP_TYPE_UPLOAD && desc.size < 4096) {
+        resourceDesc.Width = 4096;
+        aether::log::warn("create_buffer: padded upload heap buffer from {} to 4096 bytes", desc.size);
+    } else {
+        resourceDesc.Width = desc.size;
+    }
     resourceDesc.Height = 1;
     resourceDesc.DepthOrArraySize = 1;
     resourceDesc.MipLevels = 1;
@@ -301,7 +308,16 @@ BufferPtr DeviceD3D12::create_buffer(const BufferDesc& desc) {
         IID_PPV_ARGS(&buffer->resource));
 
     if (FAILED(hr)) {
-        aether::log::error("Failed to create buffer of size {} bytes", desc.size);
+        aether::log::error("Failed to create buffer of size {} bytes (Width={}, hr={:#010x}, heap={}, flags={})",
+                           desc.size, static_cast<uint64_t>(resourceDesc.Width),
+                           static_cast<unsigned>(hr),
+                           static_cast<int>(desc.heap),
+                           static_cast<int>(desc.bindFlags));
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+            HRESULT reason = m_device->GetDeviceRemovedReason();
+            aether::log::error("D3D12 device removed! GetDeviceRemovedReason() = {:#010x}",
+                               static_cast<unsigned>(reason));
+        }
         return nullptr;
     }
 
@@ -391,14 +407,13 @@ ShaderBindingPtr DeviceD3D12::create_shader_binding(const BindingLayout& layout)
         aether::log::warn("create_shader_binding: numDescriptors is 0");
         return nullptr;
     }
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_descriptorAllocator.alloc_cpu(layout.numDescriptors);
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = m_descriptorAllocator.alloc_gpu(layout.numDescriptors);
-    if (cpuHandle.ptr == 0 || gpuHandle.ptr == 0) {
+    auto handles = m_descriptorAllocator.alloc(layout.numDescriptors);
+    if (handles.cpu.ptr == 0 || handles.gpu.ptr == 0) {
         aether::log::error("create_shader_binding: descriptor allocation failed");
         return nullptr;
     }
     return std::make_shared<ShaderBindingD3D12>(
-        m_device.Get(), cpuHandle, gpuHandle,
+        m_device.Get(), handles.cpu, handles.gpu,
         layout.numDescriptors, m_descriptorAllocator.descriptorSize);
 }
 
@@ -627,26 +642,18 @@ void DeviceD3D12::wait_for_idle() {
 }
 
 // === DescriptorAllocator ===
-D3D12_CPU_DESCRIPTOR_HANDLE DescriptorAllocator::alloc_cpu(UINT count) {
+DescriptorAllocator::AllocResult DescriptorAllocator::alloc(UINT count) {
     if (currentOffset + count > capacity) {
         aether::log::error("DescriptorAllocator: out of descriptors ({}/{})",
                            currentOffset + count, capacity);
-        return {0};
+        return {{0}, {0}};
     }
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = {cpuStart.ptr + currentOffset * descriptorSize};
+    UINT offset = currentOffset;
     currentOffset += count;
-    return handle;
-}
-
-D3D12_GPU_DESCRIPTOR_HANDLE DescriptorAllocator::alloc_gpu(UINT count) {
-    if (currentOffset + count > capacity) {
-        aether::log::error("DescriptorAllocator: out of descriptors ({}/{})",
-                           currentOffset + count, capacity);
-        return {0};
-    }
-    D3D12_GPU_DESCRIPTOR_HANDLE handle = {gpuStart.ptr + currentOffset * descriptorSize};
-    currentOffset += count;
-    return handle;
+    AllocResult result;
+    result.cpu = {cpuStart.ptr + offset * descriptorSize};
+    result.gpu = {gpuStart.ptr + offset * descriptorSize};
+    return result;
 }
 
 void DescriptorAllocator::reset() {
@@ -661,7 +668,7 @@ ShaderBindingD3D12::ShaderBindingD3D12(ID3D12Device10* device,
     : m_device(device), m_gpuHandle(gpuStart), m_cpuHandle(cpuStart),
       m_descriptorCount(count), m_descriptorSize(descriptorSize) {}
 
-void ShaderBindingD3D12::set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset) {
+void ShaderBindingD3D12::set_buffer(uint32_t slot, BufferPtr buffer, uint64_t offset, uint32_t stride) {
     if (slot >= m_descriptorCount) return;
     auto* buf = static_cast<BufferD3D12*>(buffer.get());
     if (!buf || !buf->resource) return;
@@ -678,19 +685,21 @@ void ShaderBindingD3D12::set_buffer(uint32_t slot, BufferPtr buffer, uint64_t of
         m_device->CreateConstantBufferView(&cbvDesc, cpuHandle);
     } else if (slot < 14 + 128) {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        srvDesc.Buffer.FirstElement = static_cast<UINT>(offset / sizeof(uint32_t));
-        srvDesc.Buffer.NumElements = static_cast<UINT>(buf->desc.size / sizeof(uint32_t));
+        srvDesc.Buffer.FirstElement = static_cast<UINT>(offset / (stride > 0 ? stride : 4u));
+        srvDesc.Buffer.NumElements = static_cast<UINT>(buf->desc.size / (stride > 0 ? stride : 4u));
+        srvDesc.Buffer.StructureByteStride = stride > 0 ? stride : 4;
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         m_device->CreateShaderResourceView(buf->resource.Get(), &srvDesc, cpuHandle);
     } else {
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-        uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
         uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        uavDesc.Buffer.FirstElement = static_cast<UINT>(offset / sizeof(uint32_t));
-        uavDesc.Buffer.NumElements = static_cast<UINT>(buf->desc.size / sizeof(uint32_t));
+        uavDesc.Buffer.FirstElement = static_cast<UINT>(offset / (stride > 0 ? stride : 4u));
+        uavDesc.Buffer.NumElements = static_cast<UINT>(buf->desc.size / (stride > 0 ? stride : 4u));
+        uavDesc.Buffer.StructureByteStride = stride > 0 ? stride : 4;
         uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
         m_device->CreateUnorderedAccessView(buf->resource.Get(), nullptr, &uavDesc, cpuHandle);
     }

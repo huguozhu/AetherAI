@@ -117,4 +117,59 @@ bool Frustum::contains(const BoundingSphere& sphere) const {
     return true;
 }
 
+// === BoundingBox ===
+
+float3 BoundingBox::center() const {
+    return {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f, (min.z + max.z) * 0.5f};
+}
+
+float3 BoundingBox::extents() const {
+    return {(max.x - min.x) * 0.5f, (max.y - min.y) * 0.5f, (max.z - min.z) * 0.5f};
+}
+
+BoundingBox BoundingBox::from_center_extents(const float3& center, const float3& extents) {
+    return {{center.x - extents.x, center.y - extents.y, center.z - extents.z},
+            {center.x + extents.x, center.y + extents.y, center.z + extents.z}};
+}
+
+BoundingBox BoundingBox::from_sphere(const BoundingSphere& sphere) {
+    return {{sphere.center.x - sphere.radius, sphere.center.y - sphere.radius, sphere.center.z - sphere.radius},
+            {sphere.center.x + sphere.radius, sphere.center.y + sphere.radius, sphere.center.z + sphere.radius}};
+}
+
+// === Frustum-Box containment ===
+
+Containment Frustum::contains(const BoundingBox& box) const {
+    // Corners of the bounding box
+    float3 corners[8] = {
+        {box.min.x, box.min.y, box.min.z},
+        {box.max.x, box.min.y, box.min.z},
+        {box.min.x, box.max.y, box.min.z},
+        {box.max.x, box.max.y, box.min.z},
+        {box.min.x, box.min.y, box.max.z},
+        {box.max.x, box.min.y, box.max.z},
+        {box.min.x, box.max.y, box.max.z},
+        {box.max.x, box.max.y, box.max.z},
+    };
+
+    bool allInside = true;
+    for (int p = 0; p < 6; ++p) {
+        const auto& plane = planes[p];
+        bool anyInside = false;
+        for (int c = 0; c < 8; ++c) {
+            float d = plane.x * corners[c].x
+                    + plane.y * corners[c].y
+                    + plane.z * corners[c].z
+                    + plane.w;
+            if (d >= 0) {
+                anyInside = true;
+            } else {
+                allInside = false;
+            }
+        }
+        if (!anyInside) return Containment::Outside;
+    }
+    return allInside ? Containment::Inside : Containment::Intersects;
+}
+
 } // namespace aether::math

@@ -26,9 +26,8 @@ struct SceneObject {
 };
 
 struct VisibleInfo {
-    uint visible : 1;
-    uint lodLevel : 3;
-    uint _pad : 28;
+    uint visible;   // 0 or 1
+    uint lodLevel;
 };
 
 struct ViewData {
@@ -38,7 +37,12 @@ struct ViewData {
     float    farPlane;
 };
 
-ConstantBuffer<ViewData> viewData : register(b0);
+cbuffer viewData : register(b0) {
+    float4x4 viewProj;
+    float3   eyePos;
+    float    nearPlane;
+    float    farPlane;
+};
 StructuredBuffer<SceneObject> sceneObjects : register(t0);
 RWStructuredBuffer<VisibleInfo> visibleOutput : register(u0);
 
@@ -55,10 +59,10 @@ void mainCS(uint3 dispatchId : SV_DispatchThreadID) {
 
     // Frustum culling: check sphere against all 6 planes of view-proj
     float4 sphere = obj.boundingSphere;
-    float4 c0 = viewData.viewProj[0];
-    float4 c1 = viewData.viewProj[1];
-    float4 c2 = viewData.viewProj[2];
-    float4 c3 = viewData.viewProj[3];
+    float4 c0 = viewProj[0];
+    float4 c1 = viewProj[1];
+    float4 c2 = viewProj[2];
+    float4 c3 = viewProj[3];
 
     // Left: m3 + m0
     float d = c3.x + c0.x;
@@ -85,7 +89,7 @@ void mainCS(uint3 dispatchId : SV_DispatchThreadID) {
     if (d < -sphere.w * abs(c3.w - c0.w)) { visibleOutput[objIndex] = info; return; }
 
     // Sphere is visible — determine LOD
-    float3 eyeToObj = sphere.xyz - viewData.eyePos;
+    float3 eyeToObj = sphere.xyz - eyePos;
     float dist = length(eyeToObj);
 
     uint lod = 0;
@@ -125,10 +129,10 @@ CullingJob::CullingJob(std::shared_ptr<rhi::Device> device,
     if (m_binding) {
         // Slot 0: view data constant buffer → CBV b0
         m_binding->set_buffer(0, m_constantBuffer);
-        // Slot 14: scene object buffer → SRV t0
-        m_binding->set_buffer(14, m_sceneBuffer);
-        // Slot 142: visible output buffer → UAV u0
-        m_binding->set_buffer(142, m_visibleBuffer);
+        // Slot 14: scene object buffer → SRV t0 (structured, stride = sizeof(SceneObjectGPU))
+        m_binding->set_buffer(14, m_sceneBuffer, 0, sizeof(SceneObjectGPU));
+        // Slot 142: visible output buffer → UAV u0 (structured, stride = sizeof(VisibleInfo))
+        m_binding->set_buffer(142, m_visibleBuffer, 0, sizeof(VisibleInfo));
     }
 
     // Compile culling compute shader

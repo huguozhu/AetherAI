@@ -19,9 +19,8 @@ namespace aether::renderer {
 // Reads VisibleInfo[] and writes packed DrawArg[] for visible objects
 static const char* compactShaderSrc = R"(
 struct VisibleInfo {
-    uint visible : 1;
-    uint lodLevel : 3;
-    uint _pad : 28;
+    uint visible;   // 0 or 1
+    uint lodLevel;
 };
 
 struct DrawArg {
@@ -41,7 +40,9 @@ struct SceneObject {
     uint2    _pad;
 };
 
-ConstantBuffer<uint> objectCount : register(b0);
+cbuffer objectCountBuffer : register(b0) {
+    uint objectCount;
+};
 StructuredBuffer<SceneObject> sceneObjects : register(t0);
 StructuredBuffer<VisibleInfo> visibleInput : register(t1);
 RWStructuredBuffer<DrawArg> indirectOutput : register(u0);
@@ -140,9 +141,9 @@ IndirectDrawManager::IndirectDrawManager(std::shared_ptr<rhi::Device> device,
     m_binding = m_device->create_shader_binding(layout);
     if (m_binding) {
         m_binding->set_buffer(0, m_objectCountBuffer);    // CBV b0: object count
-        m_binding->set_buffer(14, m_sceneBuffer);          // SRV t0: scene objects
-        m_binding->set_buffer(15, m_visibleBuffer);        // SRV t1: visible input
-        m_binding->set_buffer(142, m_indirectBuffer);      // UAV u0: indirect output
+        m_binding->set_buffer(14, m_sceneBuffer, 0, sizeof(SceneObjectGPU));   // SRV t0: scene objects
+        m_binding->set_buffer(15, m_visibleBuffer, 0, sizeof(VisibleInfo));    // SRV t1: visible input
+        m_binding->set_buffer(142, m_indirectBuffer, 0, sizeof(DrawArg));      // UAV u0: indirect output
     }
 
     m_shadersLoaded = true;

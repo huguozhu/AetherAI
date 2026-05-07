@@ -189,3 +189,24 @@ void compactCS(uint3 dispatchId : SV_DispatchThreadID) {
         indirectOutput[destIndex] = arg;
     }
 }
+
+// ============================================================================
+// Forward rendering — vertex format: position(float3) only
+// Used by: SceneManager forward rendering (forwardVS, forwardPS)
+// ============================================================================
+
+struct VSOutput_Forward {
+    float4 pos : SV_POSITION;
+};
+
+[shader("vertex")]
+VSOutput_Forward forwardVS(float3 position : POSITION) {
+    VSOutput_Forward o;
+    o.pos = float4(position, 1.0);
+    return o;
+}
+
+[shader("pixel")]
+float4 forwardPS(VSOutput_Forward input) : SV_TARGET {
+    return float4(0.0, 1.0, 0.0, 1.0);
+}
