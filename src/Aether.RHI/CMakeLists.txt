@@ -1,4 +1,5 @@
 add_library(Aether.RHI STATIC)
+set_target_properties(Aether.RHI PROPERTIES FOLDER "AetherEngine")
 
 target_sources(Aether.RHI
     PUBLIC

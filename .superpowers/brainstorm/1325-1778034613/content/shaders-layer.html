@@ -1,0 +1,256 @@
+<h2>第五层：Aether.Shaders — HLSL 编译与反射</h2>
+<p class="subtitle">基于 DXC 编译器，支持 Ray Tracing Shader + Mesh Shader</p>
+
+<div class="mockup">
+  <div class="mockup-header">Shader 编译管线</div>
+  <div class="mockup-body">
+    <pre style="font-size:12px;line-height:1.7;">
+.hlsl 源文件                       .cso (Compiled Shader Object)
+   │                                      │
+   ▼                                      ▼
+┌─────────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────┐
+│  DXC        │    │  Shader      │    │  Shader  │    │  Pipeline    │
+│  (dxc.exe)  │──► │  Reflection  │──► │  Library │──► │  State       │
+│  or libdxc  │    │              │    │  Cache   │    │  Creation    │
+└─────────────┘    └──────────────┘    └──────────┘    └──────────────┘
+
+实现选择:
+  • 离线编译: 开发时 .hlsl → .cso，运行时只加载
+  • 运行时编译: 通过 libdxc.dll 动态编译（方便迭代）
+  • 混合: 发布用离线，开发用运行时
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>模块接口</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+namespace aether::shaders {
+
+// Shader 编译目标类型
+export enum class ShaderType {
+    Vertex,
+    Pixel,
+    Compute,
+    Mesh,        // ← Mesh Shader
+    Amplification,
+    RayGen,      // ← Ray Tracing
+    Miss,
+    ClosestHit,
+    AnyHit,
+    Intersection,
+    Callable,
+    Library      // 包含多个入口的库
+};
+
+// 宏定义
+export struct ShaderMacro {
+    std::string name;
+    std::string value;
+};
+
+// 编译描述
+export struct ShaderCompileDesc {
+    std::string_view entryPoint;     // 入口函数名
+    ShaderType type;                 // 目标类型
+    std::string_view source;         // HLSL 源码
+    std::string_view filePath;       // 用于诊断
+    std::vector&lt;ShaderMacro&gt; macros; // 宏定义
+    bool enableDebug = false;        // 调试信息
+    bool enableOptimization = true;  // 优化 (-O3)
+};
+
+// 编译结果
+export struct ShaderCompileResult {
+    bool success = false;
+    std::vector&lt;std::byte&gt; bytecode; // DXIL
+    std::string errorMessage;
+    ShaderReflection reflection;
+};
+
+// 反射数据
+export struct ShaderReflection {
+    struct Binding {
+        std::string name;
+        uint32_t slot;
+        uint32_t space;        // 对应 register(b, space=N)
+        BindingType type;      // CBV/SRV/UAV/Sampler
+        uint32_t count;        // 数组大小
+    };
+    struct InputParam {
+        std::string semanticName;
+        uint32_t semanticIndex;
+        rhi::Format format;
+    };
+    std::vector&lt;Binding&gt; bindings;
+    std::vector&lt;InputParam&gt; inputs;
+    uint32_t threadGroupSizeX = 0; // Compute/Mesh 使用
+    uint32_t threadGroupSizeY = 0;
+    uint32_t threadGroupSizeZ = 0;
+    bool hasRayPayload = false;     // Ray Tracing 相关
+};
+
+// Shader 编译器
+export class ShaderCompiler {
+public:
+    ShaderCompiler();
+    ~ShaderCompiler();
+
+    // 编译单个 Shader
+    ShaderCompileResult Compile(const ShaderCompileDesc& desc) const;
+
+    // 编译 Shader Library（后续链接用）
+    ShaderCompileResult CompileLibrary(std::string_view source,
+                                        std::string_view filePath,
+                                        const std::vector&lt;ShaderMacro&gt;& macros) const;
+
+    // 获取 dxc 版本信息
+    static std::string_view GetVersionInfo();
+};
+
+// Shader Library (运行时缓存)
+export class ShaderLibrary {
+public:
+    // 加载编译好的 .cso 文件
+    bool LoadFromFile(std::string_view path, std::string_view name);
+
+    // 获取 Shader Bytecode
+    const std::vector&lt;std::byte&gt;* GetBytecode(std::string_view name) const;
+
+    // 获取反射信息
+    const ShaderReflection* GetReflection(std::string_view name) const;
+
+private:
+    std::unordered_map&lt;std::string, ShaderCompileResult, ...&gt; m_shaders;
+};
+
+} // namespace aether::shaders
+  </pre>
+</div>
+
+<div class="section">
+  <h3>Ray Tracing Shader 示例</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// raytrace.hlsl
+RaytracingAccelerationStructure RTAS : register(t0);
+RWTexture2D&lt;float4&gt; RenderTarget : register(u0);
+
+[shader("raygeneration")]
+void RayGen() {
+    uint2 dispatchIdx = DispatchRaysIndex().xy;
+    // ...
+    RayDesc ray = { /* from camera */ };
+    TraceRay(RTAS, RAY_FLAG_NONE, ~0, 0, 1, 0, ray);
+}
+
+[shader("closesthit")]
+void ClosestHit(inout HitInfo payload, BuiltinIntersectionAttribs attr) {
+    // ...
+}
+
+[shader("miss")]
+void Miss(inout HitInfo payload) {
+    payload.color = float3(0.1, 0.1, 0.2);
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>Mesh Shader 示例</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// mesh.hlsl
+struct MeshOutput {
+    float4 position : SV_POSITION;
+    float3 normal   : NORMAL;
+    float2 uv       : TEXCOORD0;
+};
+
+groupshared MeshOutput sharedVertices[64];
+
+[numthreads(64, 1, 1)]
+[outputtopology("triangle")]
+void MainMS(uint gtid : SV_GroupThreadID,
+            uint gid  : SV_GroupID) {
+    SetMeshOutputCounts(64, 114); // 64 顶点, 114 三角形（假设）
+
+    // 读取顶点数据
+    StructuredBuffer&lt;Vertex&gt; Vertices = ...;
+    Vertex v = Vertices[gid * 64 + gtid];
+    sharedVertices[gtid].position = mul(mul(float4(v.pos, 1), World), ViewProj);
+    sharedVertices[gtid].normal = v.normal;
+    sharedVertices[gtid].uv = v.uv;
+
+    // 输出顶点
+    if (gtid &lt; 64)
+        DispatchMesh(gtid, sharedVertices[gtid]);
+
+    // 输出索引 (简化: 每线程输出一个三角形)
+    if (gtid &lt; 114) {
+        uint base = gid * 114 + gtid;
+        uint idx0 = base * 3;
+        uint idx1 = base * 3 + 1;
+        uint idx2 = base * 3 + 2;
+        DispatchMesh(gtid, idx0, idx1, idx2);
+    }
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>与 RHI 的衔接</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// Renderer 中的使用流程
+void BuildPipeline() {
+    using namespace aether::shaders;
+
+    ShaderCompiler compiler;
+    ShaderLibrary library;
+
+    // 1. 编译 Shader
+    auto vs = compiler.Compile({.entryPoint="MainVS", .type=ShaderType::Vertex, ...});
+    auto ms = compiler.Compile({.entryPoint="MainMS", .type=ShaderType::Mesh, ...});
+    auto ps = compiler.Compile({.entryPoint="MainPS", .type=ShaderType::Pixel, ...});
+    auto rayGen = compiler.Compile({.entryPoint="RayGen", .type=ShaderType::RayGen, ...});
+
+    // 2. RHI 创建管线
+    rhi::GfxPipelineDesc desc;
+    desc.vs = vs.bytecode;  // DXIL bytecode
+    desc.ps = ps.bytecode;
+    // 或 mesh shader 路径
+    desc.ms = ms.bytecode;
+    // 或 ray tracing
+    desc.rt = {rayGen.bytecode, miss.bytecode, hit.bytecode};
+
+    auto pipeline = device->CreateGraphicsPipeline(desc);
+    // 或 RT Pipeline
+    auto rtPipeline = device->CreateRayTracingPipeline(rtDesc);
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>设计决策汇总</h3>
+  <ul>
+    <li><strong>使用 DXC (libdxc)</strong> — 微软官方 HLSL 编译器，支持所有 Shader Model 6.x 特性，包括 Ray Tracing (SM 6.5+) 和 Mesh Shader (SM 6.5+)</li>
+    <li><strong>输出 DXIL</strong> — D3D12 原生消费 DXIL；Vulkan 侧通过 <code>VK_KHR_shader_barycentric</code> + SPIRV 转换，或走 <code>dxil-spirv</code> 转换路径</li>
+    <li><strong>离线/运行时双模式</strong> — 开发时运行时编译（快速迭代），发布时预编译 .cso</li>
+    <li><strong>Shader Library</strong> — 缓存编译结果和反射数据，避免重复编译</li>
+  </ul>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Shader 层设计没问题</h3>
+      <p>全部设计验证完成</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

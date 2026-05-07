@@ -1,4 +1,5 @@
 add_executable(TriangleExample)
+set_target_properties(TriangleExample PROPERTIES FOLDER "Examples")
 target_sources(TriangleExample PRIVATE main.cpp)
 target_link_libraries(TriangleExample PRIVATE Aether.Renderer Aether.Shaders Aether.RHI Aether.Core)
 

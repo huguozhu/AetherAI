@@ -56,6 +56,7 @@ struct GfxPipelineDesc {
     Format dsvFormat = Format::D32_FLOAT;
     uint32_t rtvCount = 1;
     bool noInputLayout = false; // set true when VS uses SV_VertexID/SV_InstanceID only
+    bool frontCounterClockwise = false; // triangle winding (false = CW front, true = CCW front)
 };
 
 struct ComputePipelineDesc {

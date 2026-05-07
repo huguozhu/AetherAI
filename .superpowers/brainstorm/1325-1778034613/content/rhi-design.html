@@ -1,0 +1,133 @@
+<h2>第二层：RHI — CommandList 抽象设计</h2>
+<p class="subtitle">纯抽象接口层，D3D12 为主实现，Vulkan 为次要实现</p>
+
+<div class="mockup">
+  <div class="mockup-header">RHI 模块内部结构</div>
+  <div class="mockup-body">
+    <pre style="font-size:13px;line-height:1.7;">
+aether.rhi                    模块接口 (export)
+├── Device                    ▸ 创建设备、交换链、资源
+├── CommandList               ▸ 命令列表基类
+│   ├── GraphicsCommandList   ▸ 绘制、渲染状态
+│   ├── ComputeCommandList    ▸ 计算调度
+│   └── CopyCommandList       ▸ 资源拷贝、上传
+├── Resource                  ▸ GPU 资源基类
+│   ├── Buffer                ▸ 顶点/索引/常量/结构体缓冲区
+│   ├── Texture               ▸ 2D/3D/Cube纹理
+│   └── AccelerationStructure ▸ RT加速结构
+├── PipelineState             ▸ 管线状态对象
+├── ShaderBinding             ▸ 描述符/参数绑定
+├── Fence                     ▸ GPU-CPU 同步
+└── SwapChain                 ▸ 窗口呈现
+
+aether.rhi.platform          内部实现分区（不导出）
+├── DeviceD3D12
+├── CommandListD3D12
+├── ResourceD3D12
+└── ... (Vulkan 同理)
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>CommandList 核心设计</h3>
+  <p>所有 GPU 操作通过 CommandList 记录，提交到 GPU 执行。这是 D3D12 和 Vulkan 的共性抽象：</p>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// 伪代码：CommandList 接口设计
+export interface CommandList {
+    void Reset();
+    void Close();
+
+    // 通用
+    void ResourceBarrier(BarrierDesc);
+    void Clear(Buffer/Texture, ...);
+    void Copy(Resource src, Resource dst);
+    void BindPipeline(PipelineState);
+    void BindDescriptor(ShaderBinding, uint slot);
+    void PushConstants(uint size, void* data);
+}
+
+export interface GraphicsCommandList : CommandList {
+    void SetViewport(Viewport);
+    void SetScissor(Rect);
+    void IASetVertexBuffer(Slot, Buffer, Stride);
+    void IASetIndexBuffer(Buffer, Format);
+    void Draw(uint vertexCount, uint instanceCount);
+    void DrawIndexed(uint indexCount, uint instanceCount);
+    void DrawIndirect(Buffer args, uint offset);        // ← GPU Driven 关键
+    void DispatchRays(RayTracingDesc);                   // ← Ray Tracing 关键
+    void DispatchMesh(uint threadGroupCount);             // ← Mesh Shader 关键
+}
+
+export interface ComputeCommandList : CommandList {
+    void Dispatch(uint groupX, uint groupY, uint groupZ);
+    void DispatchIndirect(Buffer args, uint offset);
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>后端实现策略</h3>
+  <div style="display:flex;gap:16px;">
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4 style="color:#4a9eff;">D3D12 实现</h4>
+      <ul style="font-size:13px;">
+        <li>直接映射到 <code>ID3D12GraphicsCommandList6</code></li>
+        <li>使用 <code>ID3D12Device10</code> + <code>D3D12_FEATURE</code> 做功能检测</li>
+        <li>ShaderBinding → Descriptor Heap + Table</li>
+        <li>Mesh Shader → <code>ID3D12GraphicsCommandList::DispatchMesh</code></li>
+        <li>Ray Tracing → <code>ID3D12GraphicsCommandList5::DispatchRays</code> + StateObject</li>
+      </ul>
+    </div>
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4 style="color:#a855f7;">Vulkan 实现</h4>
+      <ul style="font-size:13px;">
+        <li>直接映射到 <code>VkCommandBuffer</code></li>
+        <li>使用 <code>vkGetPhysicalDeviceFeatures2</code> 检测支持</li>
+        <li>ShaderBinding → Descriptor Set</li>
+        <li>Mesh Shader → VK_NV_mesh_shader / VK_EXT_mesh_shader</li>
+        <li>Ray Tracing → VK_KHR_acceleration_structure + VK_KHR_ray_tracing_pipeline</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>资源生命周期</h3>
+  <p>所有 GPU 资源通过 <code>Device</code> 创建，返回句柄。资源由引用计数管理：</p>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;">
+// Device 是唯一创建资源的入口
+export interface Device {
+    Buffer*    CreateBuffer(const BufferDesc&);
+    Texture*   CreateTexture(const TextureDesc&);
+    PipelineState* CreateGraphicsPipeline(const GfxPipelineDesc&);
+    PipelineState* CreateRayTracingPipeline(const RTPipelineDesc&);
+    ShaderBinding* CreateShaderBinding(const BindingLayout&);
+
+    // 资源上传
+    CommandList* GetCopyQueue(); // 异步上传用
+    void         ExecuteCopyCommands(CommandList*);
+
+    // 同步
+    Fence*       CreateFence();
+    void         WaitForFence(Fence*, uint64 value);
+}
+  </pre>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>RHI 设计看起来没问题</h3>
+      <p>继续到 GPU Driven Pipeline</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

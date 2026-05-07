@@ -1,0 +1,98 @@
+<h2>第一层：整体模块架构</h2>
+<p class="subtitle">5 个 CMake 库 + 严格单向依赖 + C++20 Modules</p>
+
+<div class="mockup">
+  <div class="mockup-header">依赖层次（箭头 = "依赖于"）</div>
+  <div class="mockup-body">
+    <pre style="font-size:13px;line-height:1.8;text-align:center;">
+                    ┌──────────────────────┐
+                    │    Aether.Shaders    │  ← HLSL编译、反射、Shader库
+                    │  (ShaderCompiler)    │
+                    └────────┬─────────────┘
+                             │ depends on
+                    ┌────────▼─────────────┐
+                    │   Aether.Renderer    │  ← GPU Driven Pipeline
+                    │  (GPUDrivenPipeline) │      Culling, Indirect, LOD
+                    └────────┬─────────────┘
+                    ┌────────▼─────────────┐
+                    │  Aether.Resources    │  ← 异步资源加载 (Coroutine)
+                    │  (AsyncLoader)       │      Mesh/Texture/Material
+                    └────────┬─────────────┘
+                    ┌────────▼─────────────┐
+                    │     Aether.RHI       │  ← CommandList抽象
+                    │  (RHI::Device)       │      D3D12实现 / Vulkan实现
+                    │  (RHI::CommandList)  │
+                    └────────┬─────────────┘
+                    ┌────────▼─────────────┐
+                    │     Aether.Core      │  ← 基础类型、数学、内存、Log
+                    │  (Math, Memory,      │
+                    │   Span, Log)         │
+                    └──────────────────────┘
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>每个库的 C++20 Modules 设计</h3>
+  <p>每个 CMake 库是一个 Module 命名空间，公开的 Module 接口文件（<code>.ixx</code> 或 <code>.cppm</code>）放在 <code>src/&lt;lib&gt;/module/</code> 下：</p>
+
+  <table style="width:100%;border-collapse:collapse;margin:12px 0;">
+    <tr style="background:var(--bg-secondary);">
+      <th style="padding:8px;border:1px solid var(--border);text-align:left;">CMake Target</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:left;">Module 命名</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:left;">公开接口 (export)</th>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid var(--border);">Aether.Core</td>
+      <td style="padding:8px;border:1px solid var(--border);"><code>aether.core</code></td>
+      <td style="padding:8px;border:1px solid var(--border);">Math, Memory, Span, Log, Handle</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid var(--border);">Aether.RHI</td>
+      <td style="padding:8px;border:1px solid var(--border);"><code>aether.rhi</code></td>
+      <td style="padding:8px;border:1px solid var(--border);">Device, CommandList, Buffer, Texture, PipelineState, ShaderBinding</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid var(--border);">Aether.Resources</td>
+      <td style="padding:8px;border:1px solid var(--border);"><code>aether.resources</code></td>
+      <td style="padding:8px;border:1px solid var(--border);">ResourceLoader&lt;T&gt;, CoroutineTask&lt;T&gt;, MeshResource, TextureResource</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid var(--border);">Aether.Renderer</td>
+      <td style="padding:8px;border:1px solid var(--border);"><code>aether.renderer</code></td>
+      <td style="padding:8px;border:1px solid var(--border);">Scene, SceneView, CullingJob, IndirectDraw, LODManager, GPUBufferManager</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;border:1px solid var(--border);">Aether.Shaders</td>
+      <td style="padding:8px;border:1px solid var(--border);"><code>aether.shaders</code></td>
+      <td style="padding:8px;border:1px solid var(--border);">ShaderCompiler, ShaderReflection, ShaderLibrary</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>关键设计规则</h3>
+  <ul>
+    <li><strong>严禁反向依赖</strong> — Renderer 不可直接依赖 Core 以外的下层，下层不可知道上层存在</li>
+    <li><strong>接口 vs 实现</strong> — RHI 层是纯抽象接口，D3D12/Vulkan 实现在独立源码中通过条件编译选择</li>
+    <li><strong>Modules 命名约定</strong> — 全小写、点分隔，如 <code>aether.rhi.command_list</code>、<code>aether.renderer.scene_view</code></li>
+    <li><strong>内部实现不导出</strong> — 不需要跨 Module 访问的类和函数不放在 export 块中</li>
+  </ul>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>这个架构看起来没问题</h3>
+      <p>继续到下一层 RHI 设计</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

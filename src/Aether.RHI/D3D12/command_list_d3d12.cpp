@@ -306,14 +306,9 @@ void CopyCommandListD3D12::upload_buffer(Buffer* dst, uint64_t dstOffset,
         return;
     }
 
-    // Transition dst to COPY_DEST
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = dstBuf->resource.Get();
-    barrier.Transition.StateBefore = dstBuf->initialState;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    m_list->ResourceBarrier(1, &barrier);
+    // No barrier needed: COPY queues with Enhanced Barriers require resources
+    // to stay in COMMON layout. Newly-created resources start in COMMON, and
+    // COMMON is valid as a copy destination on COPY command lists.
 
     // Create a temporary upload buffer and copy data into it
     D3D12_HEAP_PROPERTIES uploadHeap{};
@@ -347,10 +342,6 @@ void CopyCommandListD3D12::upload_buffer(Buffer* dst, uint64_t dstOffset,
     m_list->CopyBufferRegion(dstBuf->resource.Get(), dstOffset,
                               uploadRes.Get(), 0, size);
 
-    // Transition dst back to original state
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    m_list->ResourceBarrier(1, &barrier);
-
     // Keep upload resource alive until command list is submitted and GPU is done
     m_pendingUploads.push_back(std::move(uploadRes));
 }
@@ -363,15 +354,6 @@ void CopyCommandListD3D12::upload_texture(Texture* dst,
         aether::log::error("upload_texture: invalid dst or src");
         return;
     }
-
-    // Transition dst to COPY_DEST
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = dstTex->resource.Get();
-    barrier.Transition.StateBefore = dstTex->initialState;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    m_list->ResourceBarrier(1, &barrier);
 
     // Get copyable footprint from the D3D12 resource desc
     auto resDesc = dstTex->resource->GetDesc();
@@ -428,10 +410,6 @@ void CopyCommandListD3D12::upload_texture(Texture* dst,
     srcLoc.PlacedFootprint = footprint;
 
     m_list->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-
-    // Transition dst back to original state
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    m_list->ResourceBarrier(1, &barrier);
 
     m_pendingUploads.push_back(std::move(uploadRes));
 }

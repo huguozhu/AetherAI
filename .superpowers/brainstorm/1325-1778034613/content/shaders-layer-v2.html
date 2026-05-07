@@ -1,0 +1,239 @@
+<h2>第五层：Aether.Shaders — Slang 着色语言</h2>
+<p class="subtitle">基于 Khronos Slang，原生支持多目标 + Ray Tracing + Mesh Shader</p>
+
+<div class="mockup">
+  <div class="mockup-header">Slang 编译管线</div>
+  <div class="mockup-body">
+    <pre style="font-size:12px;line-height:1.7;">
+.slang 源文件
+      │
+      ▼
+┌──────────────────────────────────────────────────┐
+│                  Slang Compiler                   │
+│  ┌──────────────┐   ┌────────────────────────┐   │
+│  │  Frontend    │   │  Backend (多目标)       │   │
+│  │  (.slang)    │──►│  • DXIL (D3D12)         │   │
+│  │              │   │  • SPIRV (Vulkan)       │   │
+│  └──────────────┘   │  • C/C++ (host)         │   │
+│                      └────────────────────────┘   │
+│                      ┌────────────────────────┐   │
+│                      │  Built-in Reflection   │   │
+│                      │  • 参数绑定             │   │
+│                      │  • 类型信息             │   │
+│                      │  • Entry Point          │   │
+│                      └────────────────────────┘   │
+└──────────────────────────────────────────────────┘
+      │
+      ▼
+ShaderLibrary (缓存编译结果)
+      │
+      ▼
+rhi::PipelineState Creation (DXIL → D3D12, SPIRV → Vulkan)
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>为什么 Slang 比裸 HLSL+DXC 更适合</h3>
+  <div style="display:flex;gap:16px;">
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4>✅ 优势</h4>
+      <ul style="font-size:13px;">
+        <li><strong>单一源码</strong> — 一份 .slang 同时输出 DXIL 和 SPIRV</li>
+        <li><strong>无需额外转换</strong> — 不需要 dxil-spirv，节省一个编译步骤</li>
+        <li><strong>内建反射</strong> — <code>slang-reflection.h</code> 直接拿到 Binding/Types/EntryPoints</li>
+        <li><strong>Ray Tracing 原生</strong> — 完全支持 <code>[shader("raygeneration")]</code> 等</li>
+        <li><strong>Mesh Shader 原生</strong> — <code>[shader("mesh")]</code> 和 <code>[shader("amplification")]</code></li>
+        <li><strong>模块系统</strong> — Slang 自带 <code>import</code>，Shader 间可以复用代码</li>
+        <li><strong>参数绑定</strong> — 通过 <code>[shader("...")]</code> 属性 + 反射自动化</li>
+      </ul>
+    </div>
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4>⚠️ 代价</h4>
+      <ul style="font-size:13px;">
+        <li>额外依赖（slang.h + slang.lib + slang.dll）</li>
+        <li>学习成本——Slang 语法与 HLSL 有差异</li>
+        <li>社区规模小于 HLSL/GLSL</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>模块接口（更新后）</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+namespace aether::shaders {
+
+// 编译目标
+export enum class ShaderTarget {
+    DXIL,       // D3D12
+    SPIRV,      // Vulkan
+};
+
+// 编译描述
+export struct ShaderCompileDesc {
+    std::string_view source;         // .slang 源码
+    std::string_view entryPointName; // 入口函数名
+    std::string_view profile;        // "sm_6_7", "spirv_1_6"
+    ShaderTarget target = ShaderTarget::DXIL;
+    std::vector&lt;std::string_view&gt; importPaths; // import 搜索路径
+    bool enableDebug = false;
+};
+
+// 编译结果（包含 Slang 的内建反射）
+export class ShaderCompileResult {
+public:
+    bool IsValid() const;
+
+    // 获取 DXIL / SPIRV bytecode
+    std::span&lt;const std::byte&gt; GetBytecode() const;
+
+    // Slang 反射接口（直接暴露 slang::IShaderReflection*）
+    slang::IShaderReflection* GetReflection() const;
+
+    // 便捷方法
+    uint32_t GetBindingCount() const;
+    BindingDesc GetBinding(uint32_t index) const;
+
+    // 资源要求
+    bool RequiresRayTracing() const;
+    bool RequiresMeshShader() const;
+
+private:
+    // ...
+};
+
+// Shader 编译器
+export class ShaderCompiler {
+public:
+    ShaderCompiler();
+    ~ShaderCompiler();
+
+    // 创建 Slang Session (全局)
+    bool Initialize();
+
+    // 编译 Shader
+    ShaderCompileResult Compile(const ShaderCompileDesc& desc);
+
+    // 预加载 Slang 模块
+    bool LoadModule(std::string_view moduleName, std::string_view path);
+
+    // 获取 Slang 版本
+    static std::string_view GetVersionInfo();
+};
+
+// Shader Library (缓存)
+export class ShaderLibrary {
+public:
+    bool Add(std::string_view name, ShaderCompileResult result);
+    const ShaderCompileResult* Get(std::string_view name) const;
+private:
+    std::unordered_map&lt;std::string, ShaderCompileResult&gt; m_cache;
+};
+
+} // namespace aether::shaders
+  </pre>
+</div>
+
+<div class="section">
+  <h3>Slang 示例：Ray Tracing + Mesh Shader</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// scene.slang — 完全兼容 HLSL 语法
+
+// === Ray Tracing ===
+RaytracingAccelerationStructure RTAS : register(t0);
+RWTexture2D&lt;float4&gt; RenderTarget : register(u0);
+
+struct HitInfo { float3 color; };
+
+[shader("raygeneration")]
+void RayGen() {
+    uint2 idx = DispatchRaysIndex().xy;
+    RayDesc ray = { /* 相机光线 */ };
+    HitInfo payload = { float3(0,0,0) };
+    TraceRay(RTAS, RAY_FLAG_NONE, ~0, 0, 1, 0, ray, payload);
+    RenderTarget[idx] = float4(payload.color, 1);
+}
+
+[shader("closesthit")]
+void ClosestHit(inout HitInfo payload, BuiltinIntersectionAttribs attr) {
+    payload.color = float3(1, 0, 0);
+}
+
+[shader("miss")]
+void Miss(inout HitInfo payload) {
+    payload.color = float3(0.1, 0.1, 0.2);
+}
+
+// === Mesh Shader ===
+struct VertexData { float3 pos; float3 normal; float2 uv; };
+
+[shader("mesh")]
+[outputtopology("triangle")]
+void MeshMain(
+    uint gtid : SV_GroupThreadID,
+    uint gid  : SV_GroupID,
+    uint vid  : SV_ViewID)
+{
+    SetMeshOutputCounts(64, 114);
+
+    StructuredBuffer&lt;VertexData&gt; vertices : register(t0);
+    VertexData v = vertices[gid * 64 + gtid];
+    // 输出顶点...
+    DispatchMesh(gtid, v);
+
+    if (gtid &lt; 114) {
+        uint base = gtid * 3;
+        DispatchMesh(gtid, base, base + 1, base + 2);
+    }
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>创建管线（更新后）</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// 使用 Slang，创建 D3D12 管线
+ShaderCompiler compiler;
+compiler.Initialize();
+
+// 编译：Slang 自动输出 DXIL
+auto result = compiler.Compile({
+    .source = shaderSource,
+    .entryPointName = "MainVS",
+    .profile = "sm_6_7",
+    .target = ShaderTarget::DXIL,  // D3D12
+});
+
+// RHI 创建管线
+rhi::GfxPipelineDesc desc;
+desc.vs.bytecode = result.GetBytecode(); // DXIL bytecode
+
+auto pipeline = device->CreateGraphicsPipeline(desc);
+
+// Vulkan: 只需改 ShaderTarget
+auto resultVk = compiler.Compile({
+    .source = shaderSource,
+    .entryPointName = "MainVS",
+    .profile = "spirv_1_6",       // ← 不同 profile
+    .target = ShaderTarget::SPIRV, // ← 不同 target
+});
+  </pre>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Slang 方案可以</h3>
+      <p>全部设计验证完成</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

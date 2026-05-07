@@ -1,0 +1,77 @@
+<h2>渲染引擎架构方案对比</h2>
+<p class="subtitle">基于：C++20 Modules / Windows(D3D12→Vulkan) / 研究学习项目 / CMake</p>
+
+<div class="section">
+  <h3>方案 A：分层库架构 <span class="label" style="background:var(--accent);color:white;">推荐</span></h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+    <div class="mock-button" style="background:#4a6fa5;">Aether.Core</div>
+    <div class="mock-button" style="background:#4a8c6f;">Aether.RHI</div>
+    <div class="mock-button" style="background:#8c6f4a;">Aether.Resources</div>
+    <div class="mock-button" style="background:#8c4a6f;">Aether.Renderer</div>
+    <div class="mock-button" style="background:#6f4a8c;">Aether.Shaders</div>
+  </div>
+  <p>多个 CMake STATIC 库，每个库内部使用 C++20 Modules。严格分层依赖：<code>Core → RHI → Resources → Renderer → Shaders</code>。</p>
+  <div class="pros-cons">
+    <div class="pros"><h4>优势</h4><ul>
+      <li>构建隔离好，修改底层只重编相关库</li>
+      <li>清晰的依赖方向，防止循环依赖</li>
+      <li>每一层可独立测试和理解</li>
+      <li>Modules 粒度适中，避免巨型 Module</li>
+    </ul></div>
+    <div class="cons"><h4>代价</h4><ul>
+      <li>CMake 跨 target 传递 Module 依赖需要额外配置</li>
+      <li>模块间循环引用需要接口层隔离</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>方案 B：单体模块项目</h3>
+  <p>单一 CMake 目标，所有源代码按目录结构组织，通过 C++20 Modules 分区（Partition）来划分内部模块。</p>
+  <div class="mockup">
+    <div class="mockup-header">模块分区结构</div>
+    <div class="mockup-body">
+      <pre style="font-size:12px;line-height:1.5;">
+Aether          // 主模块接口
+├── Aether:Core          // 基础类型、数学、内存
+├── Aether:RHI           // 命令列表、GPU 资源抽象
+├── Aether:RHI:D3D12     // D3D12 实现分区
+├── Aether:RHI:Vulkan    // Vulkan 实现分区
+├── Aether:Resources     // 异步资源加载
+├── Aether:Renderer      // GPU Driven Pipeline
+└── Aether:Shaders       // HLSL 编译与反射
+      </pre>
+    </div>
+  </div>
+  <div class="pros-cons">
+    <div class="pros"><h4>优势</h4><ul>
+      <li>Modules 分区间共享类型更直接</li>
+      <li>构建配置简单，单个 CMake target</li>
+      <li>适合学习——所有代码在一个命名空间视野内</li>
+    </ul></div>
+    <div class="cons"><h4>代价</h4><ul>
+      <li>修改任何部分都需要重编整个项目（随规模变大痛点明显）</li>
+      <li>编译器对 Module Partitions 的支持仍在演进</li>
+      <li>无法利用并行构建隔离</li>
+    </ul></div>
+  </div>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>分层库架构 <span class="label" style="background:var(--accent);color:white;">推荐</span></h3>
+      <p>多个 CMake 库，严格分层依赖，构建隔离好</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>单体模块项目</h3>
+      <p>单一 CMake 目标，通过 Modules Partitions 组织</p>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:16px;"><strong>我的推荐：方案 A（分层库架构）</strong>。原因：(1) C++20 Modules 目前跨 target 的支持已趋于成熟（CMake 3.28+ / VS 17.12+ / Clang 18+）；(2) 学习项目也需要好的构建体验，避免后期每次修改等待全量重编；(3) 未来如果要给不同项目复用渲染层，分层架构天然支持。</p>

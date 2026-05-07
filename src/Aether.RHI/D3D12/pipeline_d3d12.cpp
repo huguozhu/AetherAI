@@ -28,7 +28,7 @@ GraphicsPipelinePtr DeviceD3D12::create_graphics_pipeline(const GfxPipelineDesc&
     D3D12_RASTERIZER_DESC rasterizerDesc{};
     rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
     rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
-    rasterizerDesc.FrontCounterClockwise = FALSE;
+    rasterizerDesc.FrontCounterClockwise = desc.frontCounterClockwise ? TRUE : FALSE;
     rasterizerDesc.DepthClipEnable = TRUE;
     rasterizerDesc.MultisampleEnable = FALSE;
     rasterizerDesc.AntialiasedLineEnable = FALSE;

@@ -1,4 +1,5 @@
 add_library(Aether.Core STATIC)
+set_target_properties(Aether.Core PROPERTIES FOLDER "AetherEngine")
 target_sources(Aether.Core
     PUBLIC
         FILE_SET CXX_MODULES

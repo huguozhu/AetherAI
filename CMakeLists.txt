@@ -41,13 +41,34 @@ else()
 endif()
 message(STATUS "Slang SDK config dir: ${slang_DIR}")
 
+# === glTF Library ===
+include(FetchContent)
+FetchContent_Declare(
+    fastgltf
+    URL https://github.com/spnda/fastgltf/archive/refs/tags/v0.7.2.zip
+    SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/fastgltf-src"
+)
+set(FETCHCONTENT_QUIET OFF)
+set(FASTGLTF_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(fastgltf)
+
+# === stb_image for texture loading ===
+set(STB_IMAGE_DIR "${CMAKE_SOURCE_DIR}/external/stb")
+if(NOT EXISTS "${STB_IMAGE_DIR}/stb_image.h")
+    message(FATAL_ERROR "stb_image.h not found at ${STB_IMAGE_DIR}/stb_image.h. "
+                        "Download manually from https://raw.githubusercontent.com/nothings/stb/master/stb_image.h")
+endif()
+
 add_subdirectory(src/Aether.Core)
 add_subdirectory(src/Aether.RHI)
 add_subdirectory(src/Aether.Resources)
 add_subdirectory(src/Aether.Renderer)
 add_subdirectory(src/Aether.Shaders)
+add_subdirectory(src/Aether.Gltf)
 
 if(AETHER_BUILD_EXAMPLES)
     add_subdirectory(examples/triangle)
     add_subdirectory(examples/slang_triangle)
+    add_subdirectory(examples/gltf_viewer)
+    add_subdirectory(examples/sponza_viewer)
 endif()

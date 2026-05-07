@@ -1,0 +1,182 @@
+<h2>第四层：Aether.Resources — Coroutine 异步资源加载</h2>
+<p class="subtitle">基于 C++20 Coroutine + 并行解码管线</p>
+
+<div class="mockup">
+  <div class="mockup-header">资源加载管线</div>
+  <div class="mockup-body">
+    <pre style="font-size:13px;line-height:1.7;">
+请求资源          磁盘/网络I/O         解码            上传到GPU          完成
+   │                  │                  │                 │               │
+   │  LoadAsync<Mesh> │                  │                 │               │
+   ├──────────────────►                  │                 │               │
+   │                  │  ReadFileAsync   │                 │               │
+   │                  ├─────────────────►│                 │               │
+   │                  │                  │ Decode (assimp) │               │
+   │                  │                  ├──────►          │               │
+   │                  │                  │                 │ Upload via    │
+   │                  │                  │                 │ Copy Queue    │
+   │                  │                  │                 ├────►          │
+   │                  │                  │                 │               │
+   ◄──────────────────┴──────────────────┴─────────────────┴───────────────►
+   co_return BufferPtr/MeshResource
+
+   协程链: co_await 每个阶段，不阻塞调用线程
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Core 基础：Task&lt;T&gt; 协程类型</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// Aether.Core 中定义的协程原语
+namespace aether::core {
+
+// 一个简单的 Task&lt;T&gt; 类型，支持 co_await
+template &lt;typename T&gt;
+class Task {
+    struct promise_type { /* ... */ };
+    // co_await 返回 T 或 void
+};
+
+// 调度器：将协程投递到线程池
+class Scheduler {
+    void Schedule(Task&lt;void&gt; task);
+};
+
+// 线程池 (全局单例)
+class ThreadPool {
+    static ThreadPool& Get();
+    void Enqueue(std::coroutine_handle&lt;&gt; handle);
+};
+
+} // namespace aether::core
+  </pre>
+</div>
+
+<div class="section">
+  <h3>资源加载器设计</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+namespace aether::resources {
+
+// 资源加载器 — 公开接口
+export class ResourceLoader {
+public:
+    ResourceLoader(std::shared_ptr&lt;rhi::Device&gt; device, core::ThreadPool& pool);
+
+    // 异步加载 Mesh，返回 MeshResource（BufferPtr 顶点/索引）
+    core::Task&lt;MeshResource&gt; LoadMeshAsync(std::string_view path);
+
+    // 异步加载纹理
+    core::Task&lt;TextureResource&gt; LoadTextureAsync(std::string_view path);
+
+    // 异步加载材质描述
+    core::Task&lt;MaterialResource&gt; LoadMaterialAsync(std::string_view path);
+
+private:
+    core::Task&lt;MeshResource> LoadMeshInternal(std::string path);
+    core::Task&lt;TextureResource> LoadTextureInternal(std::string path);
+
+    std::shared_ptr&lt;rhi::Device&gt; m_device;
+    core::ThreadPool& m_threadPool;
+};
+
+// 资源类型 (导出)
+export struct MeshResource {
+    rhi::BufferPtr vertexBuffer;
+    rhi::BufferPtr indexBuffer;
+    uint32_t vertexCount;
+    uint32_t indexCount;
+    // LOD 级别数据
+    std::vector&lt;MeshLOD&gt; lods;
+};
+
+export struct TextureResource {
+    rhi::TexturePtr texture;
+    uint32_t width, height;
+    rhi::Format format;
+};
+
+export struct MaterialResource {
+    // 材质参数，后续传入 ShaderBinding
+    MaterialParams params;
+    std::vector&lt;TextureResource&gt; textures;
+};
+
+} // namespace aether::resources
+  </pre>
+</div>
+
+<div class="section">
+  <h3>协程加载流程示例</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+core::Task&lt;MeshResource&gt; ResourceLoader::LoadMeshAsync(std::string_view path) {
+    // 1. 在后台线程读取文件（不阻塞主线程）
+    std::vector&lt;std::byte&gt; fileData = co_await core::ReadFileAsync(path);
+
+    // 2. 在后台线程解码 (Assimp 或 gltf 解析)
+    MeshData decoded = co_await core::RunOnThreadPool([&fileData]() {
+        return DecodeMesh(fileData);
+    });
+
+    // 3. 回到 RHI 线程创建 GPU 缓冲
+    auto vb = m_device->CreateBuffer(BufferDesc::Vertex(decoded.vertices));
+    auto ib = m_device->CreateBuffer(BufferDesc::Index(decoded.indices));
+
+    // 4. 通过 Copy Queue 上传到 GPU
+    auto copyQueue = m_device->GetCopyQueue();
+    copyQueue->Upload(vb, decoded.vertices.data());
+    copyQueue->Upload(ib, decoded.indices.data());
+    m_device->ExecuteCopyCommands(std::move(copyQueue));
+
+    co_return MeshResource{
+        .vertexBuffer = std::move(vb),
+        .indexBuffer  = std::move(ib),
+        .vertexCount  = decoded.vertexCount,
+        .indexCount   = decoded.indexCount,
+        .lods         = std::move(decoded.lods)
+    };
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>使用示例（Renderer 中调用）</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+class Scene {
+    ResourceLoader m_loader;
+
+    core::Task&lt;void&gt; LoadSceneAsync() {
+        // 并发加载多个资源
+        auto meshTask  = m_loader.LoadMeshAsync("models/character.gltf");
+        auto texTask   = m_loader.LoadTextureAsync("textures/character.png");
+
+        // 等待两者都完成
+        auto [mesh, tex] = co_await core::WhenAll(std::move(meshTask), std::move(texTask));
+
+        // 创建 GPU 场景数据
+        auto obj = SceneObject{};
+        obj.meshIndex = m_gpuSceneData.AddMesh(mesh);
+        obj.materialIndex = m_gpuSceneData.AddMaterial(tex);
+
+        co_return;
+    }
+};
+  </pre>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>资源层设计没问题</h3>
+      <p>继续到 Shader 系统和后续</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

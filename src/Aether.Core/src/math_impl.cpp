@@ -16,8 +16,8 @@ float4x4 float4x4::perspective(float fovY, float aspect, float nearZ, float farZ
     return float4x4{{
         {xScale, 0, 0, 0},
         {0, yScale, 0, 0},
-        {0, 0, farZ / (farZ - nearZ), 1},
-        {0, 0, -nearZ * farZ / (farZ - nearZ), 0}
+        {0, 0, farZ / (nearZ - farZ), -1},
+        {0, 0, nearZ * farZ / (nearZ - farZ), 0}
     }};
 }
 

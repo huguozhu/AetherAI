@@ -45,6 +45,14 @@ struct MaterialResource {
     TextureResource baseColor;
     TextureResource normalMap;
     TextureResource metallicRoughness;
+    TextureResource emissiveTexture;
+    math::float4 baseColorFactor{1, 1, 1, 1};
+    float metallicFactor = 1.0f;
+    float roughnessFactor = 1.0f;
+    math::float3 emissiveFactor{0, 0, 0};
+    bool doubleSided = false;
+    bool alphaMask = false;
+    float alphaCutoff = 0.5f;
 };
 
 // === ResourceLoader ===

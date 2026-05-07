@@ -1,4 +1,5 @@
 add_library(Aether.Shaders STATIC)
+set_target_properties(Aether.Shaders PROPERTIES FOLDER "AetherEngine")
 
 target_sources(Aether.Shaders
     PUBLIC

@@ -1,0 +1,160 @@
+<h2>第三层：GPU Driven Pipeline 架构</h2>
+<p class="subtitle">GPU Culling → Indirect Rendering → Dynamic LOD，全 GPU 管线</p>
+
+<div class="mockup">
+  <div class="mockup-header">帧循环：CPU 端 vs GPU 端</div>
+  <div class="mockup-body">
+    <pre style="font-size:12px;line-height:1.6;">
+CPU 端 (每帧)
+┌─────────────────────────────────────────────────────┐
+│  1. Frustum 数据更新 (相机矩阵、视锥体)              │
+│  2. GPU Data 更新 (移动物体、LOD 切换)              │
+│  3. 执行一次 Compute 调度 → GPU Culling             │
+│  4. 执行 Indirect Draw （读取 Culling 输出）        │
+│  5. 呈现                                                │
+└─────────────────────────────────────────────────────┘
+
+GPU 端 (Compute Shader)
+┌─────────────────────────────────────────────────────┐
+│  Visible Buffer                         间接绘制参数 │
+│  ┌────┬────┬────┬────┐     ┌────┬────┬────┬────┐  │
+│  │ 1  │ 0  │ 1  │ 1  │ →  │Draw│nop │Draw│Draw│  │
+│  └────┴────┴────┴────┘     └────┴────┴────┴────┘  │
+│  可见性标记              压紧后的间接绘制命令           │
+└─────────────────────────────────────────────────────┘
+    </pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>GPU 数据结构</h3>
+  <p>场景数据持久存储在 GPU 缓冲区中，CPU 只通过 Upload Buffer 做增量更新：</p>
+  <div style="display:flex;gap:16px;">
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4>GPU Data Buffers</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>SceneBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">物体世界矩阵、包围盒、LOD 范围</td></tr>
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>MeshBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">顶点/索引数据，每个 LOD 级别</td></tr>
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>MaterialBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">材质参数、纹理句柄</td></tr>
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>VisibleBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">Culling 输出：可见性标记</td></tr>
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>IndirectBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">压紧后的 <code>DrawIndexedInstancedIndirect</code> 参数</td></tr>
+        <tr><td style="padding:4px;border:1px solid var(--border);"><b>LODBuffer</b></td><td style="padding:4px;border:1px solid var(--border);">每个物体的当前 LOD 级别</td></tr>
+      </table>
+    </div>
+    <div style="flex:1;background:var(--bg-secondary);padding:12px;border-radius:6px;">
+      <h4>HLSL 对应结构 (GPU 侧)</h4>
+      <pre style="font-size:11px;line-height:1.5;">
+struct SceneObject {
+    float4x4 worldMatrix;
+    float3   boundingSphereCenter;
+    float    boundingSphereRadius;
+    uint     meshIndex;
+    uint     materialIndex;
+    float    lodDistance[4]; // LOD 0-3 切换距离
+};
+
+struct IndirectCommand {
+    uint indexCountPerInstance;
+    uint instanceCount;
+    uint startIndexLocation;
+    int  baseVertexLocation;
+    uint startInstanceLocation;
+};
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>GPU Culling 管线</h3>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// Compute Shader 伪代码
+RWStructuredBuffer<uint>     VisibleBuffer    : UAV 0;
+StructuredBuffer&lt;SceneObject&gt; SceneObjects    : SRV 0;
+ConstantBuffer&lt;FrustumData&gt;  Frustum          : CB 0;
+
+[numthreads(64, 1, 1)]
+void CullingCS(uint3 id : SV_DispatchThreadID) {
+    SceneObject obj = SceneObjects[id.x];
+
+    // 1. 视锥体裁剪
+    bool visible = IsInsideFrustum(Frustum, obj.boundingSphereCenter,
+                                    obj.boundingSphereRadius);
+
+    // 2. 遮挡裁剪 (可选, 通过 Hi-Z Map)
+    if (visible)
+        visible = IsNotOccluded(obj.boundingSphereCenter, obj.boundingSphereRadius);
+
+    // 3. Dynamic LOD 选择
+    uint lod = SelectLOD(obj, Frustum.CameraPos);
+
+    // 写入可见性 + LOD
+    VisibleBuffer[id.x] = visible ? (1 | (lod << 1)) : 0;
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>Indirect Rendering — 可见性压紧 (Compact)</h3>
+  <p>Culling 输出后，需要将可见物体的绘制参数压紧到 IndirectBuffer：</p>
+  <pre style="background:var(--bg-secondary);padding:12px;border-radius:6px;font-size:12px;line-height:1.5;">
+// 使用 AppendBuffer / Counter 做可见性压紧
+RWStructuredBuffer&lt;IndirectCommand&gt; IndirectArgs : UAV 0;
+AppendStructuredBuffer&lt;uint&gt;        VisibleList  : UAV 1; // 可见物体ID列表
+
+[numthreads(64, 1, 1)]
+void CompactCS(uint3 id : SV_DispatchThreadID) {
+    uint visibility = VisibleBuffer[id.x];
+    if (visibility & 0x1) { // 可见
+        uint lod = visibility >> 1;
+        SceneObject obj = SceneObjects[id.x];
+
+        // 写入可见物体 ID
+        VisibleList.Append(id.x);
+
+        // 根据 LOD 写入 Indirect 参数
+        MeshInfo mesh = MeshBuffer[obj.meshIndex][lod];
+        IndirectArgs[Counter] = mesh.GetIndirectCommand();
+    }
+}
+  </pre>
+</div>
+
+<div class="section">
+  <h3>GPU Data Management</h3>
+  <p>场景数据管理策略：</p>
+  <ul>
+    <li><strong>持久 GPU 缓冲区</strong> — 物体数据在 GPU 上分配一次，不每帧重新上传</li>
+    <li><strong>CPU 增量更新</strong> — 使用 Upload Buffer + Copy Queue 做逐帧增量更新（移动物体变换、LOD 切换）</li>
+    <li><strong>双缓冲</strong> — 每帧交替写入，避免 GPU 正在读取时 CPU 写入</li>
+    <li><strong>稀疏绑定</strong> — 材质/Mesh 数据通过 Bindless 描述符访问，Shader 中用 <code>uint index</code> 索引</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Dynamic LOD</h3>
+  <p>LOD 选择在 GPU Culling Dispatch 中同时完成：</p>
+  <ul>
+    <li><strong>距离驱动</strong> — 物体到相机的距离 vs 预设的 LOD 切换距离</li>
+    <li><strong>屏幕大小驱动</strong> — 基于物体投影到屏幕的像素面积</li>
+    <li><strong>LOD 过渡</strong> — HLSL 中做 dither crossfade，避免 LOD 切换突兀</li>
+    <li>每个物体在 SceneBuffer 中保存 4 组 LOD Mesh 索引 + 切换距离阈值</li>
+  </ul>
+</div>
+
+<div style="display:flex;gap:16px;margin-top:8px;">
+  <div class="option" data-choice="yes" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>GPU Driven Pipeline 设计没问题</h3>
+      <p>继续到 Shader 系统</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)" style="flex:1;">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>我有修改意见</p>
+    </div>
+  </div>
+</div>

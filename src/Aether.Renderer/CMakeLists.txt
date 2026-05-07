@@ -1,4 +1,5 @@
 add_library(Aether.Renderer STATIC)
+set_target_properties(Aether.Renderer PROPERTIES FOLDER "AetherEngine")
 
 target_sources(Aether.Renderer
     PUBLIC

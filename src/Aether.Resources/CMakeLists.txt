@@ -1,4 +1,5 @@
 add_library(Aether.Resources STATIC)
+set_target_properties(Aether.Resources PROPERTIES FOLDER "AetherEngine")
 
 target_sources(Aether.Resources
     PUBLIC
