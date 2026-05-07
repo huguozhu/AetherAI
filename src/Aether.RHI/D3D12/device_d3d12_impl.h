@@ -92,6 +92,8 @@ private:
     ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
     UINT                     m_dsvDescriptorSize = 0;
     UINT                     m_dsvHeapOffset = 0;
+
+    ComPtr<ID3D12CommandSignature> m_commandSignature;
 };
 
 // ResourceState → D3D12_RESOURCE_STATES conversion

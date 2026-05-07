@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
     if (pos != std::string::npos) {
         exeDir = exeDir.substr(0, pos);
     }
-    std::string shaderPath = exeDir + "/../../../../examples/slang_triangle/shaders/triangle.slang";
+    std::string shaderPath = exeDir + "/../../../../src/Shaders/aether_shaders.slang";
 
     // Create window
     g_hwnd = create_window(hInstance, SW_SHOW);

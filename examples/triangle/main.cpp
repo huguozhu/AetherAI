@@ -1,15 +1,18 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#include <d3dcompiler.h>
 #include <cstring>
 #include <vector>
 #include <memory>
 #include <cstdint>
 #include <cstddef>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 import aether.rhi;
 import aether.core;
+import aether.shaders;
 
 // Global window and device
 HWND g_hwnd = nullptr;
@@ -49,36 +52,16 @@ HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     return hwnd;
 }
 
-// Compile a shader from HLSL source using D3DCompile
-std::vector<std::byte> compile_shader(const char* source, const char* entryPoint, const char* target) {
-    ID3DBlob* blob = nullptr;
-    ID3DBlob* error = nullptr;
-
-    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
-#ifdef _DEBUG
-    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-    HRESULT hr = D3DCompile(
-        source, strlen(source), nullptr,
-        nullptr, nullptr,
-        entryPoint, target,
-        flags, 0, &blob, &error);
-
-    if (FAILED(hr)) {
-        if (error) {
-            aether::log::error("Shader compile error: {}",
-                               static_cast<const char*>(error->GetBufferPointer()));
-            error->Release();
-        }
+// Read shader source from file
+std::string read_shader_file(const std::string& path) {
+    std::ifstream file(path, std::ios::in | std::ios::binary);
+    if (!file) {
+        aether::log::error("Failed to open shader file: {}", path);
         return {};
     }
-
-    const uint8_t* data = static_cast<const uint8_t*>(blob->GetBufferPointer());
-    std::vector<std::byte> result(blob->GetBufferSize());
-    memcpy(result.data(), blob->GetBufferPointer(), blob->GetBufferSize());
-    blob->Release();
-    return result;
+    std::stringstream ss;
+    ss << file.rdbuf();
+    return ss.str();
 }
 
 int main(int argc, char* argv[]) {
@@ -126,35 +109,51 @@ int main(int argc, char* argv[]) {
         vertexBuffer->unmap();
     }
 
-    // --- Compile shaders ---
-    const char* vertexShaderSource = R"(
-        struct VSOutput {
-            float4 pos : SV_POSITION;
-            float3 color : COLOR;
-            float2 uv : TEXCOORD;
-        };
-        VSOutput mainVS(float3 pos : POSITION, float3 color : COLOR, float2 uv : TEXCOORD) {
-            VSOutput output;
-            output.pos = float4(pos, 1.0);
-            output.color = color;
-            output.uv = uv;
-            return output;
-        }
-    )";
+    // --- Compile shaders via Aether.Shaders ---
+    // Determine shader path relative to executable
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(nullptr, exePath, sizeof(exePath));
+    std::string exeDir(exePath);
+    auto pos = exeDir.find_last_of('\\');
+    if (pos != std::string::npos) {
+        exeDir = exeDir.substr(0, pos);
+    }
+    std::string shaderPath = exeDir + "/../../../../src/Shaders/aether_shaders.slang";
 
-    const char* pixelShaderSource = R"(
-        struct VSOutput {
-            float4 pos : SV_POSITION;
-            float3 color : COLOR;
-            float2 uv : TEXCOORD;
-        };
-        float4 mainPS(VSOutput input) : SV_TARGET {
-            return float4(input.color, 1.0);
-        }
-    )";
+    aether::shaders::ShaderCompiler compiler;
 
-    auto vsBytecode = compile_shader(vertexShaderSource, "mainVS", "vs_5_0");
-    auto psBytecode = compile_shader(pixelShaderSource, "mainPS", "ps_5_0");
+    std::string shaderSource = read_shader_file(shaderPath);
+    if (shaderSource.empty()) {
+        aether::log::error("Failed to read shader file: {}", shaderPath);
+        return 1;
+    }
+
+    auto vsResult = compiler.compile({
+        .source = shaderSource,
+        .entryPoint = "mainVS",
+        .type = aether::shaders::ShaderType::Vertex,
+        .target = aether::shaders::ShaderTarget::DXIL,
+    });
+    if (!vsResult.is_valid()) {
+        aether::log::error("VS compilation failed: {}", vsResult.get_error());
+        return 1;
+    }
+
+    auto psResult = compiler.compile({
+        .source = shaderSource,
+        .entryPoint = "mainPS",
+        .type = aether::shaders::ShaderType::Pixel,
+        .target = aether::shaders::ShaderTarget::DXIL,
+    });
+    if (!psResult.is_valid()) {
+        aether::log::error("PS compilation failed: {}", psResult.get_error());
+        return 1;
+    }
+
+    auto vsBytecode = std::vector<std::byte>(
+        vsResult.get_bytecode().begin(), vsResult.get_bytecode().end());
+    auto psBytecode = std::vector<std::byte>(
+        psResult.get_bytecode().begin(), psResult.get_bytecode().end());
 
     if (vsBytecode.empty() || psBytecode.empty()) {
         aether::log::error("Failed to compile shaders");

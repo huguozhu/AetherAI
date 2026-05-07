@@ -75,9 +75,11 @@ void mainCS(uint3 dispatchId : SV_DispatchThreadID) {
 )";
 
 IndirectDrawManager::IndirectDrawManager(std::shared_ptr<rhi::Device> device,
+                                          std::shared_ptr<rhi::Buffer> sceneBuffer,
                                           std::shared_ptr<rhi::Buffer> visibleBuffer,
                                           std::shared_ptr<rhi::Buffer> indirectBuffer)
     : m_device(std::move(device))
+    , m_sceneBuffer(std::move(sceneBuffer))
     , m_visibleBuffer(std::move(visibleBuffer))
     , m_indirectBuffer(std::move(indirectBuffer))
 {
@@ -124,29 +126,65 @@ IndirectDrawManager::IndirectDrawManager(std::shared_ptr<rhi::Device> device,
         return;
     }
 
+    // Create constant buffer for object count
+    auto cbDesc = rhi::BufferDesc{
+        .size = 256,
+        .heap = rhi::HeapType::Upload,
+        .bindFlags = rhi::BindFlags::ConstantBuffer,
+    };
+    m_objectCountBuffer = m_device->create_buffer(cbDesc);
+
+    // Create descriptor binding: CBV b0 + SRV t0/t1 + UAV u0
+    rhi::BindingLayout layout{};
+    layout.numDescriptors = 143; // 14 CBV + 128 SRV + 1 UAV
+    m_binding = m_device->create_shader_binding(layout);
+    if (m_binding) {
+        m_binding->set_buffer(0, m_objectCountBuffer);    // CBV b0: object count
+        m_binding->set_buffer(14, m_sceneBuffer);          // SRV t0: scene objects
+        m_binding->set_buffer(15, m_visibleBuffer);        // SRV t1: visible input
+        m_binding->set_buffer(142, m_indirectBuffer);      // UAV u0: indirect output
+    }
+
     m_shadersLoaded = true;
     log::info("IndirectDrawManager: initialized");
 }
 
-void IndirectDrawManager::dispatch_compact(rhi::ComputeCommandList* cmdList) {
+void IndirectDrawManager::dispatch_compact(rhi::ComputeCommandList* cmdList,
+                                            uint32_t objectCount) {
     if (!cmdList || !m_shadersLoaded) return;
 
-    cmdList->bind_pipeline(m_pipeline.get());
-    // TODO: bind scene + visible + indirect buffers
-    // For now, stub - real implementation needs proper descriptor binding
+    // Update object count in constant buffer
+    if (m_objectCountBuffer) {
+        void* mapped = m_objectCountBuffer->map();
+        if (mapped) {
+            memcpy(mapped, &objectCount, sizeof(objectCount));
+            m_objectCountBuffer->unmap();
+        }
+    }
 
-    uint32_t groupsX = (kMaxObjects + 63) / 64;
+    // Bind pipeline and descriptors
+    cmdList->bind_pipeline(m_pipeline.get());
+    cmdList->bind_descriptor(0, m_binding.get());
+
+    // Dispatch with one thread group per 64 objects
+    uint32_t groupsX = (std::max)(1u, (objectCount + 63) / 64);
     cmdList->dispatch(groupsX, 1, 1);
+
+    log::debug("IndirectDraw: compact dispatch ({} objects, {} groups)", objectCount, groupsX);
 }
 
 void IndirectDrawManager::draw(rhi::GraphicsCommandList* cmdList,
-                                rhi::Buffer* indexBuffer) {
+                                rhi::Buffer* indexBuffer,
+                                uint32_t objectCount) {
     if (!cmdList || !m_shadersLoaded) return;
 
     // Draw indirect from the compacted arguments
-    cmdList->draw_indirect(m_indirectBuffer.get(), 0, kMaxObjects, sizeof(DrawArg));
+    // Draw up to max objects — invisible ones have instanceCount=0 (harmless)
+    if (m_indirectBuffer) {
+        cmdList->draw_indirect(m_indirectBuffer.get(), 0, objectCount, sizeof(DrawArg));
+    }
 
-    log::debug("IndirectDraw: drawing {} objects via ExecuteIndirect", kMaxObjects);
+    log::debug("IndirectDraw: drawing {} objects via ExecuteIndirect", objectCount);
 }
 
 } // namespace aether::renderer

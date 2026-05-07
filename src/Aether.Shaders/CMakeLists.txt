@@ -12,6 +12,7 @@ target_sources(Aether.Shaders
 )
 
 target_link_libraries(Aether.Shaders PUBLIC Aether.Core)
+target_link_libraries(Aether.Shaders PUBLIC d3dcompiler.lib)
 target_include_directories(Aether.Shaders PUBLIC src)
 
 # Slang SDK integration — slang_DIR is set by the root CMakeLists.txt.

@@ -103,9 +103,7 @@ void GraphicsCommandListD3D12::bind_descriptor(uint32_t /*slot*/,
     if (sb && m_descriptorHeap) {
         ID3D12DescriptorHeap* heaps[] = { m_descriptorHeap };
         m_list->SetDescriptorHeaps(1, heaps);
-        // Root signature must have a descriptor table at param 0 for this to work.
-        // The current default root signature has 0 params; calling this will fail.
-        // TODO: switch to a root signature with descriptor table
+        m_list->SetGraphicsRootDescriptorTable(0, sb->m_gpuHandle);
     }
 }
 
@@ -156,11 +154,18 @@ void GraphicsCommandListD3D12::draw_indexed(uint32_t indexCount,
     m_list->DrawIndexedInstanced(indexCount, instanceCount, startIndex, baseVertex, startInstance);
 }
 
-void GraphicsCommandListD3D12::draw_indirect(Buffer* /*args*/,
-                                              uint32_t /*offset*/,
-                                              uint32_t /*drawCount*/,
+void GraphicsCommandListD3D12::draw_indirect(Buffer* args,
+                                              uint32_t offset,
+                                              uint32_t drawCount,
                                               uint32_t /*stride*/) {
-    // TODO: requires command signature
+    auto* buf = static_cast<BufferD3D12*>(args);
+    if (!buf || !buf->resource || !m_commandSignature) {
+        aether::log::warn("draw_indirect: missing args buffer or command signature");
+        return;
+    }
+    m_list->ExecuteIndirect(m_commandSignature, drawCount,
+                             buf->resource.Get(), offset,
+                             nullptr, 0);
 }
 
 void GraphicsCommandListD3D12::dispatch_mesh(uint32_t groupX, uint32_t groupY,
@@ -227,9 +232,7 @@ void ComputeCommandListD3D12::bind_descriptor(uint32_t /*slot*/,
     if (sb && m_descriptorHeap) {
         ID3D12DescriptorHeap* heaps[] = { m_descriptorHeap };
         m_list->SetDescriptorHeaps(1, heaps);
-        // Root signature must have a descriptor table at param 0 for this to work.
-        // The current default root signature has 0 params.
-        // TODO: switch to a root signature with descriptor table
+        m_list->SetComputeRootDescriptorTable(0, sb->m_gpuHandle);
     }
 }
 

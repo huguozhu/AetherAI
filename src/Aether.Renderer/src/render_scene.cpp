@@ -22,6 +22,7 @@ RenderScene::RenderScene(std::shared_ptr<rhi::Device> device)
 
     m_indirectDraw = std::make_unique<IndirectDrawManager>(
         m_device,
+        m_sceneManager->scene_buffer_shared(),
         m_sceneManager->visible_buffer_shared(),
         m_sceneManager->indirect_buffer_shared());
 
@@ -49,10 +50,11 @@ void RenderScene::render(rhi::GraphicsCommandList* gfxCmd,
     m_cullingJob->dispatch(computeCmd);
 
     // 3. Dispatch compaction compute shader
-    m_indirectDraw->dispatch_compact(computeCmd);
+    uint32_t objCount = m_sceneManager->object_count();
+    m_indirectDraw->dispatch_compact(computeCmd, objCount);
 
     // 4. Indirect draw
-    m_indirectDraw->draw(gfxCmd, nullptr);
+    m_indirectDraw->draw(gfxCmd, nullptr, objCount);
 
     log::debug("RenderScene: frame rendered ({} objects)",
                m_sceneManager->object_count());

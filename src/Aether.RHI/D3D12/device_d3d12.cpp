@@ -82,6 +82,24 @@ void DeviceD3D12::initialize() {
         }
     }
 
+    // Create command signature for indirect draw
+    {
+        D3D12_INDIRECT_ARGUMENT_DESC argDesc{};
+        argDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+
+        D3D12_COMMAND_SIGNATURE_DESC cmdSigDesc{};
+        cmdSigDesc.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+        cmdSigDesc.NumArgumentDescs = 1;
+        cmdSigDesc.pArgumentDescs = &argDesc;
+
+        if (FAILED(m_device->CreateCommandSignature(&cmdSigDesc, nullptr,
+                                                     IID_PPV_ARGS(&m_commandSignature)))) {
+            aether::log::error("Failed to create command signature for indirect draw");
+        } else {
+            aether::log::debug("Command signature created for indirect draw");
+        }
+    }
+
     // Create a fence for CPU-GPU synchronization
     HRESULT hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
     if (FAILED(hr)) {
@@ -151,13 +169,67 @@ void DeviceD3D12::create_copy_queue() {
 }
 
 void DeviceD3D12::create_default_root_signature() {
-    // Minimal root signature: no parameters, no samplers, just IA input layout support
+    // Descriptor ranges for the descriptor table (Param[0])
+    D3D12_DESCRIPTOR_RANGE ranges[3] = {};
+
+    // Range[0]: CBV b0-b13 (14 slots)
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+    ranges[0].NumDescriptors = 14;
+    ranges[0].BaseShaderRegister = 0;
+    ranges[0].RegisterSpace = 0;
+    ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Range[1]: SRV t0-t127 (128 slots)
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[1].NumDescriptors = 128;
+    ranges[1].BaseShaderRegister = 0;
+    ranges[1].RegisterSpace = 0;
+    ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Range[2]: UAV u0-u63 (64 slots)
+    ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    ranges[2].NumDescriptors = 64;
+    ranges[2].BaseShaderRegister = 0;
+    ranges[2].RegisterSpace = 0;
+    ranges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Root parameters
+    D3D12_ROOT_PARAMETER params[2] = {};
+
+    // Param[0]: Descriptor Table (all visibility, covers CBV+SRV+UAV)
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[0].DescriptorTable.NumDescriptorRanges = 3;
+    params[0].DescriptorTable.pDescriptorRanges = ranges;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Param[1]: Root CBV b14 (reserved for per-draw constants)
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[1].Descriptor.ShaderRegister = 14;
+    params[1].Descriptor.RegisterSpace = 0;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Static sampler: linear clamp, register s0
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MipLODBias = 0;
+    sampler.MaxAnisotropy = 1;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    sampler.MinLOD = 0;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC sigDesc{};
     sigDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_0;
-    sigDesc.Desc_1_0.NumParameters = 0;
-    sigDesc.Desc_1_0.pParameters = nullptr;
-    sigDesc.Desc_1_0.NumStaticSamplers = 0;
-    sigDesc.Desc_1_0.pStaticSamplers = nullptr;
+    sigDesc.Desc_1_0.NumParameters = 2;
+    sigDesc.Desc_1_0.pParameters = params;
+    sigDesc.Desc_1_0.NumStaticSamplers = 1;
+    sigDesc.Desc_1_0.pStaticSamplers = &sampler;
     sigDesc.Desc_1_0.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> serialized;
@@ -177,7 +249,7 @@ void DeviceD3D12::create_default_root_signature() {
         return;
     }
 
-    aether::log::debug("Default root signature created (minimal, 0 params)");
+    aether::log::debug("Default root signature created (descriptor table + root CBV + sampler)");
 }
 
 BufferPtr DeviceD3D12::create_buffer(const BufferDesc& desc) {
@@ -376,6 +448,7 @@ std::unique_ptr<GraphicsCommandList> DeviceD3D12::create_graphics_command_list()
     cmd->m_allocatorSlot = m_currentAllocatorSlot;
     cmd->m_descriptorHeap = m_descriptorAllocator.heap.Get();
     cmd->m_rootSignature = m_rootSignature.Get();
+    cmd->m_commandSignature = m_commandSignature.Get();
     cmd->m_list->Close();
 
     // Advance slot for next allocation
@@ -597,13 +670,13 @@ void ShaderBindingD3D12::set_buffer(uint32_t slot, BufferPtr buffer, uint64_t of
         m_cpuHandle.ptr + slot * m_descriptorSize
     };
 
-    // slot 0-13: CBV, slot 14+: SRV
+    // Root signature maps: slot 0-13 = CBV b0-b13, slot 14-141 = SRV t0-t127, slot 142+ = UAV u0-u63
     if (slot < 14) {
         D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc{};
         cbvDesc.BufferLocation = buf->resource->GetGPUVirtualAddress() + offset;
         cbvDesc.SizeInBytes = align_to(static_cast<UINT>(buf->desc.size), 256);
         m_device->CreateConstantBufferView(&cbvDesc, cpuHandle);
-    } else {
+    } else if (slot < 14 + 128) {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -612,6 +685,14 @@ void ShaderBindingD3D12::set_buffer(uint32_t slot, BufferPtr buffer, uint64_t of
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         m_device->CreateShaderResourceView(buf->resource.Get(), &srvDesc, cpuHandle);
+    } else {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.FirstElement = static_cast<UINT>(offset / sizeof(uint32_t));
+        uavDesc.Buffer.NumElements = static_cast<UINT>(buf->desc.size / sizeof(uint32_t));
+        uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+        m_device->CreateUnorderedAccessView(buf->resource.Get(), nullptr, &uavDesc, cpuHandle);
     }
 }
 

@@ -121,16 +121,19 @@ private:
 class IndirectDrawManager {
 public:
     IndirectDrawManager(std::shared_ptr<rhi::Device> device,
+                        std::shared_ptr<rhi::Buffer> sceneBuffer,
                         std::shared_ptr<rhi::Buffer> visibleBuffer,
                         std::shared_ptr<rhi::Buffer> indirectBuffer);
 
-    void dispatch_compact(rhi::ComputeCommandList* cmdList);
-    void draw(rhi::GraphicsCommandList* cmdList, rhi::Buffer* indexBuffer);
+    void dispatch_compact(rhi::ComputeCommandList* cmdList, uint32_t objectCount);
+    void draw(rhi::GraphicsCommandList* cmdList, rhi::Buffer* indexBuffer, uint32_t objectCount);
 
 private:
     std::shared_ptr<rhi::Device> m_device;
+    rhi::BufferPtr m_sceneBuffer;
     rhi::BufferPtr m_visibleBuffer;
     rhi::BufferPtr m_indirectBuffer;
+    rhi::BufferPtr m_objectCountBuffer;
     rhi::ShaderBindingPtr m_binding;
     rhi::ComputePipelinePtr m_pipeline;
     bool m_shadersLoaded = false;

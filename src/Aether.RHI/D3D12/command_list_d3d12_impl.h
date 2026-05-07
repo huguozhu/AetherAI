@@ -16,6 +16,7 @@ struct GraphicsCommandListD3D12 : public GraphicsCommandList {
     ID3D12RootSignature* m_rootSignature = nullptr;
     UINT m_allocatorSlot = UINT_MAX;
     ID3D12DescriptorHeap* m_descriptorHeap = nullptr;
+    ID3D12CommandSignature* m_commandSignature = nullptr;
 
     GraphicsCommandListD3D12(ID3D12Device10* device);
 

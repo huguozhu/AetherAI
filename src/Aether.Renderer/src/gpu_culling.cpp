@@ -117,13 +117,18 @@ CullingJob::CullingJob(std::shared_ptr<rhi::Device> device,
     };
     m_constantBuffer = m_device->create_buffer(cbDesc);
 
-    // Create shader binding: 14 CBV slots + 1 SRV at slot 14
+    // Create shader binding: CBV b0 + SRV t0 + UAV u0
+    // Root signature maps: slot 0-13 = CBV, slot 14-141 = SRV, slot 142+ = UAV
     rhi::BindingLayout layout{};
-    layout.numDescriptors = 15;
+    layout.numDescriptors = 143; // 14 CBV + 128 SRV + 1 UAV
     m_binding = m_device->create_shader_binding(layout);
     if (m_binding) {
-        // Slot 0: view data constant buffer
+        // Slot 0: view data constant buffer → CBV b0
         m_binding->set_buffer(0, m_constantBuffer);
+        // Slot 14: scene object buffer → SRV t0
+        m_binding->set_buffer(14, m_sceneBuffer);
+        // Slot 142: visible output buffer → UAV u0
+        m_binding->set_buffer(142, m_visibleBuffer);
     }
 
     // Compile culling compute shader
