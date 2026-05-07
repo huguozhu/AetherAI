@@ -5,6 +5,8 @@ module;
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #ifdef _WIN32
 #include <windows.h>
 #include <d3dcompiler.h>
@@ -13,6 +15,9 @@ module;
 module aether.shaders;
 
 import aether.core;
+import <utility>;
+
+#include "slang_backend.h"
 
 namespace aether::shaders {
 
@@ -31,25 +36,35 @@ const char* shader_type_to_profile(ShaderType type, ShaderTarget target) {
 }
 
 const char* shader_type_to_entry(ShaderType type) {
+    (void)type;
     return "main";
 }
 
 // === ShaderCompiler ===
-ShaderCompiler::ShaderCompiler() {
-#ifdef _WIN32
-    auto slangLib = LoadLibraryA("slang.dll");
-    if (slangLib) {
+
+ShaderCompiler::ShaderCompiler()
+    : m_slangAvailable(false)
+    , m_slangGlobalSession(nullptr)
+{
+#if AETHER_SLANG_AVAILABLE
+    m_slangGlobalSession = slang_create_global_session();
+    if (m_slangGlobalSession) {
         m_slangAvailable = true;
-        log::info("ShaderCompiler: Slang SDK detected");
+        log::info("ShaderCompiler: Slang SDK initialized");
     } else {
-        log::info("ShaderCompiler: Slang not found, using D3DCompile fallback");
+        log::info("ShaderCompiler: Slang not available, using D3DCompile fallback");
     }
 #else
-    log::info("ShaderCompiler: using D3DCompile fallback");
+    log::info("ShaderCompiler: built without Slang, using D3DCompile fallback");
 #endif
 }
 
-ShaderCompiler::~ShaderCompiler() = default;
+ShaderCompiler::~ShaderCompiler() {
+    if (m_slangGlobalSession) {
+        slang_destroy_global_session(m_slangGlobalSession);
+        m_slangGlobalSession = nullptr;
+    }
+}
 
 ShaderCompileResult ShaderCompiler::compile(const ShaderCompileDesc& desc) {
     if (desc.source.empty()) {
@@ -61,9 +76,26 @@ ShaderCompileResult ShaderCompiler::compile(const ShaderCompileDesc& desc) {
     if (m_slangAvailable && desc.target != ShaderTarget::D3D) {
         auto result = compile_with_slang(desc);
         if (result.is_valid()) return result;
+        log::warn("ShaderCompiler: Slang compilation failed ({}), falling back to D3DCompile",
+                   result.get_error());
+    } else if (desc.target != ShaderTarget::D3D) {
+        ShaderCompileResult result;
+        result.set_error("ShaderCompiler: Slang target requested but Slang not available");
+        return result;
     }
 
     return compile_with_d3d(desc);
+}
+
+ShaderCompileResult ShaderCompiler::compile_with_slang(const ShaderCompileDesc& desc) {
+#if AETHER_SLANG_AVAILABLE
+    return slang_compile_shader(m_slangGlobalSession, desc);
+#else
+    (void)desc;
+    ShaderCompileResult result;
+    result.set_error("ShaderCompiler: Slang not available in this build");
+    return result;
+#endif
 }
 
 ShaderCompileResult ShaderCompiler::compile_with_d3d(const ShaderCompileDesc& desc) {
@@ -71,14 +103,15 @@ ShaderCompileResult ShaderCompiler::compile_with_d3d(const ShaderCompileDesc& de
 
 #ifdef _WIN32
     std::string profile = shader_type_to_profile(desc.type, ShaderTarget::D3D);
-    std::string entry = desc.entryPoint.empty() ? shader_type_to_entry(desc.type) : desc.entryPoint;
+    std::string entry = desc.entryPoint.empty()
+        ? shader_type_to_entry(desc.type)
+        : desc.entryPoint;
 
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
 #ifdef _DEBUG
     flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
 
-    // Terminator-only macros
     D3D_SHADER_MACRO macros[] = {{nullptr, nullptr}};
 
     ID3DBlob* blob = nullptr;
@@ -113,20 +146,13 @@ ShaderCompileResult ShaderCompiler::compile_with_d3d(const ShaderCompileDesc& de
                          blob->GetBufferSize()});
     blob->Release();
 
-    log::debug("ShaderCompiler: compiled '{}' ({}, {} bytes)",
+    log::debug("ShaderCompiler: D3DCompile '{}' ({}, {} bytes)",
                entry, profile, result.get_bytecode().size());
 #else
     (void)desc;
     result.set_error("ShaderCompiler: D3DCompile not available on this platform");
 #endif
 
-    return result;
-}
-
-ShaderCompileResult ShaderCompiler::compile_with_slang(const ShaderCompileDesc& desc) {
-    ShaderCompileResult result;
-    (void)desc;
-    result.set_error("ShaderCompiler: Slang backend not fully wired");
     return result;
 }
 
