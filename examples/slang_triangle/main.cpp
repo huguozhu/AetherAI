@@ -99,7 +99,22 @@ int main(int argc, char* argv[]) {
     aether::renderer::RenderScene renderScene(g_device);
     renderScene.register_component(mesh);
 
-    aether::log::info("Registered triangle MeshComponent with SceneManager");
+    // Create camera
+    auto camera = std::make_shared<aether::renderer::CameraComponent>();
+    camera->position = {0, 0, -2};
+    camera->target = {0, 0, 0};
+    camera->fov = 60.0f;
+    camera->aspect = 800.0f / 600.0f;
+    renderScene.register_component(camera);
+
+    // Create directional light
+    auto light = std::make_shared<aether::renderer::LightComponent>();
+    light->type = aether::renderer::LightType::Directional;
+    light->color = {1, 1, 1};
+    light->direction = {0, -1, 0};
+    renderScene.register_component(light);
+
+    aether::log::info("Registered MeshComponent, CameraComponent, LightComponent with SceneManager");
 
     // --- Compile shaders with Aether.Shaders (Slang) ---
     aether::shaders::ShaderCompiler compiler;
@@ -206,13 +221,8 @@ int main(int argc, char* argv[]) {
             cmdList->clear_texture(backBuffer.get(), clearColor);
             cmdList->bind_render_targets(backBuffer.get(), nullptr);
 
-            // Update SceneManager with identity view (NDC-space rendering)
-            aether::renderer::SceneView view{};
-            view.viewProj = aether::math::float4x4::identity();
-            view.eyePosition = {0, 0, -1};
-            view.nearPlane = 0.1f;
-            view.farPlane = 100.0f;
-            renderScene.update(view);
+            // Update scene using camera's view
+            renderScene.update(camera->get_scene_view());
 
             // Render via SceneManager
             cmdList->set_viewport(0, 0, 800, 600, 0, 1);
