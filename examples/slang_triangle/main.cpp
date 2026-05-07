@@ -1,3 +1,4 @@
+#define UNICODE 1
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -35,13 +36,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"AetherSlangTriangleWindow";
-    WNDCLASSW wc = {};
+    WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-    RegisterClassW(&wc);
+    RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowExW(
+    HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"AetherAI - Slang Triangle Demo",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,

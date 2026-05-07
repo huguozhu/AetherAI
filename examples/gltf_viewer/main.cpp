@@ -1,3 +1,4 @@
+#define UNICODE 1
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -35,13 +36,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"AetherGltfViewerWindow";
-    WNDCLASSW wc = {};
+    WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-    RegisterClassW(&wc);
+    RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowExW(
+    HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"AetherAI - glTF Viewer",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
@@ -163,17 +164,21 @@ int main(int argc, char* argv[]) {
     // ── Get the first camera for scene updates ──
     // If no camera in scene, create a default one
     auto activeCamera = std::make_shared<aether::renderer::CameraComponent>();
+    activeCamera->position = {2.0f, 1.5f, 4.0f};
+    activeCamera->target = {0.0f, 0.0f, 0.0f};
+    activeCamera->fov = 60.0f;
     activeCamera->aspect = 800.0f / 600.0f;
+    activeCamera->nearPlane = 0.1f;
+    activeCamera->farPlane = 500.0f;
 
-    // Try to find a camera from the scene
+    // Try to find a camera from the scene (glTF may have embedded cameras)
     if (!useEmbeddedTriangle) {
-        // Find first CameraComponent registered
         for (uint32_t i = 0; i < 100; ++i) {
             auto comp = renderScene.get_component(i);
             if (comp) {
                 if (auto* cam = dynamic_cast<aether::renderer::CameraComponent*>(comp.get())) {
                     activeCamera = std::make_shared<aether::renderer::CameraComponent>(*cam);
-                    activeCamera->aspect = 800.0f / 600.0f; // override aspect to match window
+                    activeCamera->aspect = 800.0f / 600.0f;
                     aether::log::info("Using camera from glTF scene (pos: {:.2f},{:.2f},{:.2f})",
                                       activeCamera->position.x,
                                       activeCamera->position.y,
@@ -182,6 +187,14 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+    }
+
+    if (useEmbeddedTriangle) {
+        aether::log::info("Using fallback triangle camera");
+    } else {
+        aether::log::info("Active camera (pos: {:.2f},{:.2f},{:.2f}, target: {:.2f},{:.2f},{:.2f})",
+                          activeCamera->position.x, activeCamera->position.y, activeCamera->position.z,
+                          activeCamera->target.x, activeCamera->target.y, activeCamera->target.z);
     }
 
     // ── Compile shaders ──

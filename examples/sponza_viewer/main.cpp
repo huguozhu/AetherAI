@@ -1,3 +1,4 @@
+#define UNICODE 1
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -36,13 +37,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 HWND create_window(HINSTANCE hInstance, int nCmdShow) {
     const wchar_t CLASS_NAME[] = L"AetherSponzaViewerWindow";
-    WNDCLASSW wc = {};
+    WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-    RegisterClassW(&wc);
+    RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowExW(
+    HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"AetherAI - Sponza Viewer",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
@@ -166,6 +167,7 @@ int main(int argc, char* argv[]) {
     activeCamera->farPlane = 500.0f;
 
     // Try to find a camera from the scene (Sponza may have embedded cameras)
+    bool foundSceneCamera = false;
     for (uint32_t i = 0; i < 100; ++i) {
         auto comp = renderScene.get_component(i);
         if (comp) {
@@ -177,9 +179,15 @@ int main(int argc, char* argv[]) {
                                   activeCamera->position.x,
                                   activeCamera->position.y,
                                   activeCamera->position.z);
+                foundSceneCamera = true;
                 break;
             }
         }
+    }
+
+    if (!foundSceneCamera) {
+        aether::log::info("No camera in glTF scene, using fallback camera (pos: {:.2f},{:.2f},{:.2f})",
+                          activeCamera->position.x, activeCamera->position.y, activeCamera->position.z);
     }
 
     // ── Compile shaders ──
